@@ -3,6 +3,7 @@ import { config } from "../../config/env";
 import fs from 'fs';
 import path from 'path';
 import Busboy from 'busboy';
+import { resolveStorage, storageRel, wrapStorageWriteStream } from '../../utils/storage/store';
 
 type ParsedTranscriptionRequest = {
     provider: TranscriptionProvider;
@@ -23,10 +24,7 @@ function parseTranscriptionRequest(req: any): Promise<ParsedTranscriptionRequest
             }
         };
 
-        const uploadDir = path.join(process.cwd(), 'storage', 'uploads');
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
+        const uploadDir = resolveStorage('uploads');
 
         bb.on('field', (name, value) => {
             if (name === 'provider') {
@@ -39,7 +37,7 @@ function parseTranscriptionRequest(req: any): Promise<ParsedTranscriptionRequest
             const filename = info?.filename || 'audio';
             const mimeType = info?.mimeType || info?.mime || 'audio/webm';
             const filePath = path.join(uploadDir, `${Date.now()}-${filename}`);
-            const writeStream = fs.createWriteStream(filePath);
+            const writeStream = wrapStorageWriteStream(storageRel(filePath));
 
             file.on('error', (e) => {
                 failed = true;

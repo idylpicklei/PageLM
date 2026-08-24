@@ -7,9 +7,9 @@ import { marked } from 'marked'
 import { embedTextFromFile } from '../ai/embed'
 import { OllamaEmbeddings } from '@langchain/ollama'
 import { OpenAIEmbeddings } from '@langchain/openai'
+import { resolveStorage, storageRel, wrapStorageWriteStream, writeStorageSync } from '../../utils/storage/store'
 
-const str = path.join(process.cwd(), 'storage', 'uploads')
-if (!fs.existsSync(str)) fs.mkdirSync(str, { recursive: true })
+const uploadsDir = resolveStorage('uploads')
 
 export type UpFile = { path: string; filename: string; mimeType: string }
 
@@ -29,8 +29,9 @@ export function parseMultipart(req: any): Promise<{ q: string; chatId?: string; 
       pending++
       const filename = info?.filename || 'file'
       const mimeType = info?.mimeType || info?.mime || 'application/octet-stream'
-      const fp = path.join(str, `${Date.now()}-${filename}`)
-      const ws = fs.createWriteStream(fp)
+      const fp = path.join(uploadsDir, `${Date.now()}-${filename}`)
+      const rel = storageRel(fp)
+      const ws = wrapStorageWriteStream(rel)
       file.on('error', e => { failed = true; reject(e) })
       ws.on('error', e => { failed = true; reject(e) })
       ws.on('finish', () => { files.push({ path: fp, filename, mimeType }); pending--; done() })
@@ -49,7 +50,7 @@ export async function handleUpload(a: { filePath: string; filename?: string; con
   const txt = await extractText(fp, mime)
   if (!txt?.trim()) throw new Error('No valid content extracted from file.')
   const out = `${fp}.txt`
-  fs.writeFileSync(out, txt)
+  writeStorageSync(storageRel(out), txt)
   const isO = process.env.LLM_PROVIDER === 'ollama'
   const _emb = isO
     ? new OllamaEmbeddings({ model: process.env.OLLAMA_MODEL || 'llama3' })

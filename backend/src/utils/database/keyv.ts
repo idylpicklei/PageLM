@@ -1,8 +1,13 @@
-import Keyv from 'keyv'
-import SQLite from '@keyv/sqlite'
+import Keyv from "keyv";
+import SQLite from "@keyv/sqlite";
+import { createCloudflareKeyvStore } from "./keyv-cloudflare";
 
-const db = new Keyv({
-  store: new SQLite({ uri: 'sqlite://storage/database.sqlite' })
-})
+const isCloud = process.env.STORAGE_BACKEND === "cloudflare";
 
-export default db
+const db = isCloud
+  ? new Keyv({ store: createCloudflareKeyvStore() as any })
+  : new Keyv({
+      store: new SQLite({ uri: "sqlite://storage/database.sqlite" }),
+    });
+
+export default db;

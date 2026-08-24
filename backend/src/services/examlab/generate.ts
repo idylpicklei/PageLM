@@ -1,19 +1,20 @@
-import fs from "fs"
-import path from "path"
 import crypto from "crypto"
 import { StateGraph, Annotation } from "@langchain/langgraph"
 import { loadExam } from "./loader"
 import { ExamPayload, ExamSpec, QuizLikeItem } from "./types"
 import { generateSectionItems } from "./generator"
+import { readStorageSync, writeStorageSync } from "../../utils/storage/store"
 
-const cacheDir = path.join(process.cwd(), "storage", "cache", "exam")
-if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
 const keyOf = (x: string) => crypto.createHash("sha256").update(x).digest("hex")
+const cacheRel = (k: string) => `cache/exam/${k}.json`
 const readCache = (k: string) => {
-  const f = path.join(cacheDir, k + ".json")
-  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null
+  try {
+    return JSON.parse(readStorageSync(cacheRel(k), "utf8") as string)
+  } catch {
+    return null
+  }
 }
-const writeCache = (k: string, v: any) => fs.writeFileSync(path.join(cacheDir, k + ".json"), JSON.stringify(v))
+const writeCache = (k: string, v: any) => writeStorageSync(cacheRel(k), JSON.stringify(v))
 
 const log = (...a: any[]) => console.log("[examlab/generate]", new Date().toISOString(), ...a)
 

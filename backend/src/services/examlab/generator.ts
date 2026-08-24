@@ -1,10 +1,9 @@
-import fs from "fs"
-import path from "path"
 import crypto from "crypto"
 import { StateGraph, Annotation } from "@langchain/langgraph"
 import llm from "../../utils/llm/llm"
 import { GenSpec, QuizLikeItem } from "./types"
 import { normalizeTopic } from "../../utils/text/normalize"
+import { readStorageSync, writeStorageSync } from "../../utils/storage/store"
 
 export type QuizItem = {
   id: number
@@ -135,14 +134,16 @@ async function ask(sys: string, user: string, tag: string) {
   return tryParse<any>(txt)
 }
 
-const cacheDir = path.join(process.cwd(), "storage", "cache", "examgen")
-if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
+const cacheRel = (k: string) => `cache/examgen/${k}.json`
 const keyOf = (x: string) => crypto.createHash("sha256").update(x).digest("hex")
 const readCache = (k: string) => {
-  const f = path.join(cacheDir, k + ".json")
-  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null
+  try {
+    return JSON.parse(readStorageSync(cacheRel(k), "utf8") as string)
+  } catch {
+    return null
+  }
 }
-const writeCache = (k: string, v: any) => fs.writeFileSync(path.join(cacheDir, k + ".json"), JSON.stringify(v))
+const writeCache = (k: string, v: any) => writeStorageSync(cacheRel(k), JSON.stringify(v))
 
 type Ctx = {
   key: string

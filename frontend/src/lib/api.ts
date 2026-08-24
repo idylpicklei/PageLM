@@ -116,6 +116,8 @@ function wsURL(path: string) {
   return `${proto}//${u.host}${path}`;
 }
 
+export { wsURL };
+
 export async function chatJSON(body: ChatJSONBody) {
   return req<ChatStartResponse>(`${env.backend}/chat`, {
     method: "POST",

@@ -5,7 +5,11 @@
     "build": "tsc -p backend/tsconfig.json",
     "start": "node backend/dist/src/core/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:frontend": "npm run build --prefix frontend",
+    "deploy:cloudflare": "npm run build && npm run build:frontend && wrangler deploy",
+    "cf:dev": "wrangler dev",
+    "cf:d1:migrate": "wrangler d1 migrations apply pagelm-db --remote"
   },
   "authors": [
     "nullure (https://github.com/nullure)",
@@ -43,14 +47,18 @@
     "ws": "^8.18.3",
     "youtube-transcript": "^1.2.1",
     "@langchain/textsplitters": "^1.0.1",
-    "@langchain/classic": "^1.0.34"
+    "@langchain/classic": "^1.0.34",
+    "@aws-sdk/client-s3": "^3.888.0"
   },
   "devDependencies": {
+    "@cloudflare/containers": "^0.0.28",
+    "@cloudflare/workers-types": "^4.20250823.0",
     "@types/node": "^24.5.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.20.5",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.1",
+    "wrangler": "^4.33.0"
   },
   "overrides": {
     "expr-eval": "npm:expr-eval-fork@^3.0.0",

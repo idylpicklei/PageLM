@@ -1,6 +1,5 @@
-import fs from "fs"
-import path from "path"
 import crypto from "crypto"
+import { readStorageSync, writeStorageSync } from "../../utils/storage/store"
 import llm from "../../utils/llm/llm"
 import { execDirect } from "../../agents/runtime"
 import { normalizeTopic } from "../../utils/text/normalize"
@@ -226,11 +225,16 @@ Apply all principles above to create content that demonstrates:
 [[RESTRICTIONS "END"]]
 `.trim()
 
-const cacheDir = path.join(process.cwd(), "storage", "cache", "ask")
-if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
 const keyOf = (x: any) => crypto.createHash("sha256").update(typeof x === "string" ? x : JSON.stringify(x)).digest("hex")
-const readCache = (k: any) => { const f = path.join(cacheDir, keyOf(k) + ".json"); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null }
-const writeCache = (k: any, v: any) => { const f = path.join(cacheDir, keyOf(k) + ".json"); fs.writeFileSync(f, JSON.stringify(v)) }
+const cacheRel = (k: any) => `cache/ask/${keyOf(k)}.json`
+const readCache = (k: any) => {
+  try {
+    return JSON.parse(readStorageSync(cacheRel(k), "utf8") as string)
+  } catch {
+    return null
+  }
+}
+const writeCache = (k: any, v: any) => writeStorageSync(cacheRel(k), JSON.stringify(v))
 
 type HistoryMessage = { role: string; content: any }
 

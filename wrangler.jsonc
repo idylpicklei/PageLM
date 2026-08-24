@@ -1,0 +1,73 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pagelm",
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "PageLMContainer",
+      "image": "./Dockerfile.pagelm",
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PAGELM_BACKEND",
+        "class_name": "PageLMContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["PageLMContainer"]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pagelm-db",
+      "database_id": "af3ff44c-1ee4-4ee8-bad3-44c9adebbf70",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  // Uncomment after enabling R2 in the Cloudflare dashboard:
+  // "r2_buckets": [{ "binding": "STORAGE", "bucket_name": "pagelm-storage" }],
+  "vars": {
+    "R2_BUCKET_NAME": "pagelm-storage",
+    "CLOUDFLARE_ACCOUNT_ID": "c537fdc75bc4ff82c03a0744a319875c",
+    "LLM_PROVIDER": "gemini",
+    "EMB_PROVIDER": "gemini",
+    "db_mode": "json"
+  },
+  "assets": {
+    "directory": "./frontend/dist",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/_cf/*",
+      "/api/*",
+      "/ws/*",
+      "/chat*",
+      "/quiz*",
+      "/flashcards*",
+      "/podcast*",
+      "/smartnotes*",
+      "/exam*",
+      "/debate*",
+      "/tasks*",
+      "/planner*",
+      "/sessions*",
+      "/reminders*",
+      "/slots*",
+      "/transcriber*",
+      "/storage/*",
+      "/health"
+    ]
+  }
+}

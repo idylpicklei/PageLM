@@ -1,9 +1,8 @@
-import fs from "fs"
-import path from "path"
 import { Chroma } from "@langchain/community/vectorstores/chroma"
 import { Document } from "@langchain/core/documents"
 import { EmbeddingsInterface } from "@langchain/core/embeddings"
 import { config } from "../../config/env"
+import { readStorage, writeStorage } from "../storage/store"
 
 const memoryStores: Record<string, any> = {}
 const retrieverCache: Record<string, any> = {}
@@ -14,11 +13,9 @@ export async function saveDocuments(
   embeddings: EmbeddingsInterface
 ) {
   if (config.db_mode === "json") {
-    const file = path.join(process.cwd(), "storage", "json", `${collection}.json`)
-    const dir = path.dirname(file)
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(
-      file,
+    const rel = `json/${collection}.json`
+    await writeStorage(
+      rel,
       JSON.stringify(
         docs.map(d => ({
           pageContent: typeof d.pageContent === "string" ? d.pageContent : String(d.pageContent ?? ""),
@@ -48,8 +45,13 @@ export async function getRetriever(
   if (retrieverCache[collection]) return retrieverCache[collection]
 
   if (config.db_mode === "json") {
-    const file = path.join(process.cwd(), "storage", "json", `${collection}.json`)
-    const docsRaw = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : []
+    const rel = `json/${collection}.json`
+    let docsRaw: any[] = []
+    try {
+      docsRaw = JSON.parse((await readStorage(rel, "utf-8")) as string)
+    } catch {
+      docsRaw = []
+    }
     const docs = docsRaw.map((d: any) => new Document({
       pageContent: typeof d.pageContent === "string" ? d.pageContent : String(d.pageContent ?? ""),
       metadata: d.metadata || {},

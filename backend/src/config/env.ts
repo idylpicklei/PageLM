@@ -12,7 +12,7 @@ export const config = {
   openrouter_model: process.env.openrouter_model || '',
   gemini: process.env.gemini || process.env.GOOGLE_API_KEY || '',
   gemini_model: process.env.gemini_model || 'gemini-1.5-pro',
-  gemini_embed_model: process.env.gemini_embed_model || 'text-embedding-004',
+  gemini_embed_model: process.env.gemini_embed_model || 'gemini-embedding-001',
   openai: process.env.OPENAI_API_KEY || '',
   openai_embed: process.env.OPENAI_EMBED_API_KEY || '',
   openai_model: process.env.OPENAI_MODEL || 'gpt-4o-mini',

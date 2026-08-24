@@ -1,0 +1,5 @@
+# Used by `wrangler dev` — copy to .dev.vars and fill in values
+CF_STORE_TOKEN=dev-store-token
+gemini=your-gemini-key
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=

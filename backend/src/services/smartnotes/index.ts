@@ -4,6 +4,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import llm from "../../utils/llm/llm"
 import { normalizeTopic } from "../../utils/text/normalize"
+import { resolveStorage, storageRel, writeStorage } from "../../utils/storage/store"
 
 export type SmartNotesOptions = { topic?: any; notes?: string; filePath?: string }
 export type SmartNotesResult = { ok: boolean; file: string }
@@ -145,13 +146,13 @@ async function fillTemplateFormPDF(data: any) {
     form.getTextField("questions").setText(sanitizeText(qna))
   } catch { }
 
-  const outDir = path.join(process.cwd(), "storage", "smartnotes")
+  const outDir = resolveStorage("smartnotes")
   await fs.promises.mkdir(outDir, { recursive: true })
   const safeTitle = sanitizeText(data.title || "notes").replace(/[^a-z0-9]/gi, "_").slice(0, 50)
   const ts = new Date().toISOString().replace(/[:.]/g, "-")
   const outPath = path.join(outDir, `${safeTitle || "notes"}_${ts}.pdf`)
   const outBytes = await pdfDoc.save()
-  await fs.promises.writeFile(outPath, outBytes)
+  await writeStorage(storageRel(outPath), Buffer.from(outBytes))
   return outPath
 }
 
@@ -201,13 +202,13 @@ async function createSimplePDF(data: any) {
     y -= 12
   }
 
-  const outDir = path.join(process.cwd(), "storage", "smartnotes")
+  const outDir = resolveStorage("smartnotes")
   await fs.promises.mkdir(outDir, { recursive: true })
   const safeTitle = sanitizeText(data.title || "notes").replace(/[^a-z0-9]/gi, "_").slice(0, 50)
   const ts = new Date().toISOString().replace(/[:.]/g, "-")
   const outPath = path.join(outDir, `${safeTitle || "notes"}_${ts}.pdf`)
   const outBytes = await pdfDoc.save()
-  await fs.promises.writeFile(outPath, outBytes)
+  await writeStorage(storageRel(outPath), Buffer.from(outBytes))
   return outPath
 }
 

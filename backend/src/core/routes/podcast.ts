@@ -3,6 +3,7 @@ import fs from "fs"
 import { makeScript, makeAudio } from "../../services/podcast"
 import { emitToAll } from "../../utils/chat/ws"
 import { config } from "../../config/env"
+import { hydrateFromR2, resolveStorage, storageRel, writeStorageSync } from "../../utils/storage/store"
 
 const sockets = new Map<string, Set<any>>()
 const pendingJobs = new Map<string, () => Promise<void>>()
@@ -68,7 +69,7 @@ export function podcastRoutes(app: any) {
       }
 
       const pid = cryptoRandom()
-      const dir = path.join(process.cwd(), "storage", "podcasts", pid)
+      const dir = resolveStorage("podcasts", pid)
       const base = topic.replace(/[^a-z0-9]/gi, "_").slice(0, 50) || "podcast"
 
       res.status(202).send({ ok: true, pid, stream: `/ws/podcast?pid=${pid}` })
@@ -84,6 +85,7 @@ export function podcastRoutes(app: any) {
           if (!fs.existsSync(outPath)) {
             throw new Error(`Audio file not created at ${outPath}`)
           }
+          writeStorageSync(storageRel(outPath), fs.readFileSync(outPath))
           const filename = path.basename(outPath)
           const downloadUrl = `${config.baseUrl}/podcast/download/${pid}/${filename}`
           const rel = path.relative(process.cwd(), outPath).split(path.sep).join("/")
@@ -116,7 +118,8 @@ export function podcastRoutes(app: any) {
   app.get("/podcast/download/:pid/:filename", async (req: any, res: any, next: any) => {
     try {
       const { pid, filename } = req.params
-      const dirPath = path.join(process.cwd(), "storage", "podcasts", pid)
+      const dirPath = resolveStorage("podcasts", pid)
+      await hydrateFromR2(storageRel(path.join(dirPath, filename)))
       if (fs.existsSync(dirPath)) {
         const filesInDir = fs.readdirSync(dirPath)
         const actualFilename = filesInDir.find(f => f.toLowerCase() === filename.toLowerCase())
