@@ -2,7 +2,7 @@ import { OpenAI } from 'openai';
 import fs from 'fs';
 import { config } from '../../config/env';
 
-export type TranscriptionProvider = 'openai' | 'google' | 'assemblyai' | 'elevenlabs';
+export type TranscriptionProvider = 'openai' | 'google' | 'assemblyai' | 'elevenlabs' | 'gemini';
 
 export type TranscriptionResult = {
     text: string;
@@ -32,6 +32,113 @@ function getOpenAI(): OpenAI {
         throw new Error('OPENAI_API_KEY is required for this transcription provider');
     }
     return new OpenAI({ apiKey: config.openai });
+}
+
+function geminiApiKey(): string {
+    return config.gemini || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
+}
+
+export function normalizeYouTubeUrl(input: string): string | null {
+    const raw = String(input || '').trim();
+    if (!raw) return null;
+    try {
+        const u = new URL(raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`);
+        const host = u.hostname.replace(/^www\./, '').toLowerCase();
+        if (host === 'youtu.be') {
+            const id = u.pathname.split('/').filter(Boolean)[0];
+            return id ? `https://www.youtube.com/watch?v=${id}` : null;
+        }
+        if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com' || host === 'youtube-nocookie.com') {
+            const v = u.searchParams.get('v');
+            if (v) return `https://www.youtube.com/watch?v=${v}`;
+            const parts = u.pathname.split('/').filter(Boolean);
+            if ((parts[0] === 'shorts' || parts[0] === 'live' || parts[0] === 'embed') && parts[1]) {
+                return `https://www.youtube.com/watch?v=${parts[1]}`;
+            }
+        }
+    } catch {
+        return null;
+    }
+    return null;
+}
+
+export async function transcribeYouTube(youtubeUrl: string): Promise<TranscriptionResult> {
+    const url = normalizeYouTubeUrl(youtubeUrl);
+    if (!url) throw new Error('Enter a public YouTube watch, shorts, or youtu.be link');
+
+    const key = geminiApiKey();
+    if (!key) throw new Error('Gemini API key is not configured');
+
+    const model = config.gemini_model || 'gemini-3.5-flash';
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{
+                parts: [
+                    {
+                        text: `Watch this YouTube video and return ONLY valid JSON with this shape:
+{
+  "transcription": "full spoken transcript, as faithful as possible",
+  "summary": "2-3 sentence overview",
+  "keyPoints": ["..."],
+  "topics": ["..."],
+  "categories": ["..."],
+  "searchableKeywords": ["..."],
+  "studyGuide": {
+    "mainConcepts": ["..."],
+    "importantTerms": [{"term":"...","definition":"..."}],
+    "questions": ["..."],
+    "takeaways": ["..."]
+  }
+}
+Rules: public-video content only. No markdown fences. If there is little speech, transcribe what you can and still fill study fields.`,
+                    },
+                    { file_data: { file_uri: url } },
+                ],
+            }],
+        }),
+    });
+
+    const raw = await r.text();
+    if (!r.ok) {
+        if (r.status === 400 || r.status === 403 || r.status === 404) {
+            throw new Error('Gemini could not watch that video. Use a public YouTube link (not private or unlisted).');
+        }
+        throw new Error(`Gemini YouTube request failed (${r.status})`);
+    }
+
+    let payload: any = {};
+    try {
+        const data = JSON.parse(raw) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('\n').trim() || '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        payload = jsonMatch ? JSON.parse(jsonMatch[0]) : { transcription: text };
+    } catch {
+        throw new Error('Gemini returned an unreadable transcript for that video');
+    }
+
+    const text = String(payload.transcription || payload.transcript || '').trim();
+    if (!text) throw new Error('No transcript could be generated from that video');
+
+    return {
+        text,
+        provider: 'gemini',
+        studyMaterials: {
+            summary: payload.summary || '',
+            keyPoints: payload.keyPoints || [],
+            topics: payload.topics || [],
+            categories: payload.categories || ['YouTube'],
+            searchableKeywords: payload.searchableKeywords || [],
+            studyGuide: {
+                mainConcepts: payload.studyGuide?.mainConcepts || [],
+                importantTerms: payload.studyGuide?.importantTerms || [],
+                questions: payload.studyGuide?.questions || [],
+                takeaways: payload.studyGuide?.takeaways || [],
+            },
+        },
+    };
 }
 
 export async function transcribeAudio(filePath: string, provider: TranscriptionProvider = 'openai'): Promise<TranscriptionResult> {

@@ -56,7 +56,7 @@ export default function CompanionDock() {
   const headerTitle = useMemo(() => {
     if (document?.title) return document.title
     if (document?.filePath) return document.filePath.split(/[\\/]/).pop() || "Document"
-    return "Study Companion"
+    return "Dylan"
   }, [document?.filePath, document?.title])
 
   const send = async (prompt?: string) => {
@@ -116,7 +116,7 @@ export default function CompanionDock() {
           onClick={() => setOpen(true)}
           className="fixed bottom-6 right-6 z-40 px-4 py-3 rounded-2xl bg-sky-500/90 hover:bg-sky-500 text-white font-medium shadow-lg shadow-sky-500/30 transition-colors"
         >
-          Study Companion
+          Ask Dylan
         </button>
       )}
 

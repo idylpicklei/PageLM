@@ -127,6 +127,7 @@ function buildContainerEnv(request: Request, env: Env): Record<string, string> {
     db_mode: String(env.db_mode || "json"),
     LLM_PROVIDER: String(env.LLM_PROVIDER || "gemini"),
     EMB_PROVIDER: String(env.EMB_PROVIDER || "gemini"),
+    TTS_PROVIDER: String(env.TTS_PROVIDER || "gemini"),
   };
   if (env.R2_BUCKET_NAME) vars.R2_BUCKET_NAME = String(env.R2_BUCKET_NAME);
 
@@ -147,6 +148,12 @@ function buildContainerEnv(request: Request, env: Env): Record<string, string> {
     "ASSEMBLYAI_API_KEY",
     "gemini_model",
     "gemini_embed_model",
+    "GEMINI_TTS_MODEL",
+    "TTS_VOICE_GEMINI",
+    "TTS_VOICE_ALT_GEMINI",
+    "TTS_PROVIDER",
+    "ELEVEN_VOICE_A",
+    "ELEVEN_VOICE_B",
   ];
 
   for (const key of secretKeys) {

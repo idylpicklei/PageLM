@@ -464,6 +464,15 @@ export async function transcribeAudio(file: File) {
   });
 }
 
+export async function transcribeYouTube(youtubeUrl: string) {
+  return req<TranscriptionResponse>(`${env.backend}/transcriber`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ youtubeUrl }),
+    timeout: Math.max(env.timeout, 300000),
+  });
+}
+
 export type PlannerTask = {
   id: string;
   course?: string;

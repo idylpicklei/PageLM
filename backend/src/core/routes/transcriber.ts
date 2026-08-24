@@ -1,4 +1,4 @@
-import { transcribeAudio, TranscriptionProvider } from "../../services/transcriber";
+import { transcribeAudio, transcribeYouTube, TranscriptionProvider } from "../../services/transcriber";
 import { config } from "../../config/env";
 import fs from 'fs';
 import path from 'path';
@@ -74,10 +74,24 @@ export function transcriberRoutes(app: any) {
         try {
             const contentType = req.headers['content-type'] || '';
 
+            if (contentType.includes('application/json')) {
+                const youtubeUrl = String(req.body?.youtubeUrl || req.body?.url || '').trim();
+                if (!youtubeUrl) {
+                    return res.status(400).json({ ok: false, error: 'youtubeUrl required' });
+                }
+                const result = await transcribeYouTube(youtubeUrl);
+                return res.json({
+                    ok: true,
+                    transcription: result.text,
+                    provider: result.provider,
+                    studyMaterials: result.studyMaterials,
+                });
+            }
+
             if (!contentType.includes('multipart/form-data')) {
                 return res.status(400).json({
                     ok: false,
-                    error: 'Content-Type must be multipart/form-data'
+                    error: 'Send an audio file or a YouTube URL'
                 });
             }
 
@@ -116,7 +130,8 @@ export function transcriberRoutes(app: any) {
                 transcription: result.text,
                 provider: result.provider,
                 duration: result.duration,
-                confidence: result.confidence
+                confidence: result.confidence,
+                studyMaterials: result.studyMaterials,
             });
 
         } catch (error: any) {

@@ -69,8 +69,7 @@ export default function SmartNotes() {
         {filePath && (
           <a
             href={filePath}
-            target="_blank"
-            rel="noopener noreferrer"
+            download
             className="block p-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-medium text-center"
           >
             Download Notes

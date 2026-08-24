@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { transcribeAudio, type StudyMaterials } from "../../lib/api";
+import { transcribeAudio, transcribeYouTube, type StudyMaterials } from "../../lib/api";
 
 export default function Transcriber() {
   const [busy, setBusy] = useState(false);
@@ -11,6 +11,7 @@ export default function Transcriber() {
   const [confidence, setConfidence] = useState<number | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [processing, setProcessing] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -42,6 +43,34 @@ export default function Transcriber() {
       }
     } catch (error: any) {
       setStatus(`Error: ${error.message || 'Failed to transcribe audio'}`);
+    } finally {
+      setBusy(false);
+      setProcessing(false);
+    }
+  };
+
+  const handleYouTube = async () => {
+    const url = youtubeUrl.trim();
+    if (!url || busy) return;
+
+    setBusy(true);
+    setProcessing(true);
+    setStatus("Watching YouTube video...");
+    setTranscription(null);
+    setStudyMaterials(null);
+    setConfidence(null);
+
+    try {
+      const result = await transcribeYouTube(url);
+      if (result.ok && result.transcription) {
+        setTranscription(result.transcription);
+        setStudyMaterials(result.studyMaterials || null);
+        setStatus("Study materials ready!");
+      } else {
+        setStatus(`Error: ${result.error || "YouTube transcription failed"}`);
+      }
+    } catch (error: any) {
+      setStatus(`Error: ${error.message || "Failed to transcribe YouTube video"}`);
     } finally {
       setBusy(false);
       setProcessing(false);
@@ -252,7 +281,7 @@ export default function Transcriber() {
           </div>
           <div className="text-white font-semibold text-xl mb-2">Audio to Text</div>
           <div className="text-stone-300 text-sm leading-relaxed">
-            Convert lecture recordings and voice notes into organized, searchable study materials instantly.
+            Convert lecture recordings, voice notes, or a public YouTube video into organized study materials.
           </div>
         </div>
       </div>
@@ -297,6 +326,25 @@ export default function Transcriber() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 0 1-.88-7.903A5 5 0 1 1 15.9 6L16 6a5 5 0 0 1 1 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
             Upload
+          </button>
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            type="url"
+            value={youtubeUrl}
+            onChange={(e) => setYoutubeUrl(e.target.value)}
+            placeholder="Paste a public YouTube link..."
+            disabled={busy}
+            onKeyDown={(e) => e.key === "Enter" && handleYouTube()}
+            className="flex-1 px-4 py-3 rounded-xl bg-stone-900/70 border border-zinc-700 text-white placeholder-zinc-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none transition-all duration-300 disabled:opacity-50"
+          />
+          <button
+            onClick={handleYouTube}
+            disabled={busy || !youtubeUrl.trim()}
+            className="px-6 py-3 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-50 disabled:cursor-not-allowed text-stone-300 hover:text-white font-medium transition-all duration-300"
+          >
+            Transcribe
           </button>
         </div>
 

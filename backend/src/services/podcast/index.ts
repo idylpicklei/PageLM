@@ -94,7 +94,7 @@ export async function makeScript(input: string, topic?: string): Promise<POut> {
 
 export async function makeAudio(o: POut, dir: string, base: string, emit?: (m: any) => void) {
   await fs.promises.mkdir(dir, { recursive: true })
-  const segs: TSeg[] = o.segments.map((x) => ({ text: x.md, voice: x.voice }))
+  const segs: TSeg[] = o.segments.map((x) => ({ text: x.md, voice: x.voice, speaker: x.spk }))
   const out = await tts(segs, dir, base, emit)
   return out
 }

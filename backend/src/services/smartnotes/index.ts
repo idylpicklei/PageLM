@@ -124,12 +124,12 @@ async function fillTemplateFormPDF(data: any) {
   pdfDoc.registerFontkit(fontkit)
 
   const form = pdfDoc.getForm()
+  let appearanceFont: any = null
   try {
     const fontPath = path.join(process.cwd(), "assets", "fonts", "Lexend.ttf")
     if (fs.existsSync(fontPath)) {
       const fontBytes = await fs.promises.readFile(fontPath)
-      const font = await pdfDoc.embedFont(fontBytes, { subset: true })
-      try { form.updateFieldAppearances(font) } catch { }
+      appearanceFont = await pdfDoc.embedFont(fontBytes, { subset: true })
     }
   } catch { }
 
@@ -146,6 +146,12 @@ async function fillTemplateFormPDF(data: any) {
     form.getTextField("questions").setText(sanitizeText(qna))
   } catch { }
 
+  try {
+    if (appearanceFont) form.updateFieldAppearances(appearanceFont)
+    else form.updateFieldAppearances()
+  } catch { }
+  try { form.flatten() } catch { }
+
   const outDir = resolveStorage("smartnotes")
   await fs.promises.mkdir(outDir, { recursive: true })
   const safeTitle = sanitizeText(data.title || "notes").replace(/[^a-z0-9]/gi, "_").slice(0, 50)
@@ -156,18 +162,81 @@ async function fillTemplateFormPDF(data: any) {
   return outPath
 }
 
+function wrapToWidth(text: string, font: { widthOfTextAtSize: (t: string, s: number) => number }, size: number, maxWidth: number) {
+  const lines: string[] = []
+  for (const paragraph of sanitizeText(text).split(/\r?\n/)) {
+    if (!paragraph.trim()) {
+      lines.push("")
+      continue
+    }
+    let cur = ""
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const next = cur ? `${cur} ${word}` : word
+      if (font.widthOfTextAtSize(next, size) <= maxWidth) {
+        cur = next
+        continue
+      }
+      if (cur) lines.push(cur)
+      if (font.widthOfTextAtSize(word, size) <= maxWidth) {
+        cur = word
+        continue
+      }
+      let chunk = ""
+      for (const ch of word) {
+        const trial = chunk + ch
+        if (font.widthOfTextAtSize(trial, size) > maxWidth && chunk) {
+          lines.push(chunk)
+          chunk = ch
+        } else {
+          chunk = trial
+        }
+      }
+      cur = chunk
+    }
+    if (cur) lines.push(cur)
+  }
+  return lines
+}
+
 async function createSimplePDF(data: any) {
   const pdfDoc = await PDFDocument.create()
   const font = await pdfDoc.embedStandardFont(StandardFonts.Helvetica)
-  const page = pdfDoc.addPage([612, 792])
+  const bold = await pdfDoc.embedStandardFont(StandardFonts.HelveticaBold)
 
+  const pageSize: [number, number] = [612, 792]
   const margin = 48
-  const width = page.getWidth() - margin * 2
-  let y = page.getHeight() - margin
-
   const title = sanitizeText(data.title || "Notes")
-  page.drawText(title, { x: margin, y, size: 20, font, color: rgb(0, 0, 0) })
-  y -= 28
+  const bodySize = 11
+  const headingSize = 14
+  const lineGap = 16
+
+  let page = pdfDoc.addPage(pageSize)
+  let y = page.getHeight() - margin
+  const maxWidth = page.getWidth() - margin * 2
+
+  const newPage = () => {
+    page = pdfDoc.addPage(pageSize)
+    y = page.getHeight() - margin
+    page.drawText(title, { x: margin, y, size: 12, font: bold, color: rgb(0.2, 0.2, 0.2) })
+    y -= 22
+  }
+
+  const ensureSpace = (needed: number) => {
+    if (y < margin + needed) newPage()
+  }
+
+  const drawLines = (lines: string[], size: number, usedFont = font) => {
+    for (const line of lines) {
+      ensureSpace(lineGap)
+      if (line) {
+        page.drawText(line, { x: margin, y, size, font: usedFont, color: rgb(0.1, 0.1, 0.1) })
+      }
+      y -= lineGap
+    }
+  }
+
+  page.drawText(title, { x: margin, y, size: 20, font: bold, color: rgb(0, 0, 0) })
+  y -= 32
 
   const sections = [
     { h: "Notes", t: sanitizeText(data.notes || "") },
@@ -185,21 +254,11 @@ async function createSimplePDF(data: any) {
 
   for (const sec of sections) {
     if (!sec.t) continue
-    page.drawText(sec.h, { x: margin, y, size: 14, font, color: rgb(0, 0, 0) })
-    y -= 18
-
-    const lines = wrap(sec.t, 90).split("\n")
-    for (const line of lines) {
-      if (y < margin + 24) {
-        y = page.getHeight() - margin
-        const p = pdfDoc.addPage([612, 792])
-        p.drawText(title, { x: margin, y, size: 12, font, color: rgb(0, 0, 0) })
-        y -= 20
-      }
-      page.drawText(line, { x: margin, y, size: 11, font, color: rgb(0, 0, 0) })
-      y -= 14
-    }
-    y -= 12
+    ensureSpace(lineGap * 2)
+    page.drawText(sec.h, { x: margin, y, size: headingSize, font: bold, color: rgb(0, 0, 0) })
+    y -= 20
+    drawLines(wrapToWidth(sec.t, font, bodySize, maxWidth), bodySize)
+    y -= 10
   }
 
   const outDir = resolveStorage("smartnotes")
