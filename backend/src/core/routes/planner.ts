@@ -93,6 +93,15 @@ export function plannerRoutes(app: any) {
         }
     })
 
+    app.get("/planner/weekly", async (_req: any, res: any) => {
+        try {
+            const result = await plannerService.getWeeklyPlan()
+            res.send({ ok: true, ...result })
+        } catch (e: any) {
+            res.status(500).send({ ok: false, error: e?.message || "failed" })
+        }
+    })
+
     app.post("/planner/weekly", async (req: any, res: any) => {
         try {
             const request: PlannerGenerateRequest = req.body

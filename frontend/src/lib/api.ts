@@ -29,14 +29,22 @@ export type ExamEvent =
   | { type: "exam"; examId: string; payload: Question[] }
   | { type: "done" }
   | { type: "error"; examId?: string; error: string };
+export type PodcastItem = {
+  pid: string
+  filename: string
+  title: string
+  url: string
+  createdAt?: number
+}
 export type PodcastEvent =
   | { type: "ready"; pid: string }
   | { type: "phase"; value: string }
   | { type: "file"; filename: string; mime: string }
   | { type: "warn"; message: string }
   | { type: "script"; data: any }
-  | { type: "audio"; file: string; filename?: string; staticUrl?: string }
-  | { type: "done" }
+  | { type: "audio"; file: string; filename?: string; staticUrl?: string; pid?: string; title?: string }
+  | { type: "done"; file?: string; filename?: string; pid?: string; title?: string }
+  | { type: "ping"; t?: number }
   | { type: "error"; error: string }
 export type SmartNotesEvent =
   | { type: "ready"; noteId: string }
@@ -62,6 +70,9 @@ export type StudyMaterials = {
 
 export type TranscriptionResponse = {
   ok: boolean;
+  jobId?: string;
+  status?: "pending" | "done" | "error";
+  phase?: string;
   transcription?: string;
   provider?: string;
   confidence?: number;
@@ -421,6 +432,16 @@ export async function podcastStart(payload: { topic: string }) {
   });
 }
 
+export async function listPodcasts() {
+  return req<{ ok: true; podcasts: PodcastItem[] }>(`${env.backend}/podcast`, {
+    method: "GET",
+  });
+}
+
+export function podcastDownloadUrl(pid: string, filename: string) {
+  return `${env.backend}/podcast/download/${encodeURIComponent(pid)}/${encodeURIComponent(filename)}`;
+}
+
 export function connectPodcastStream(pid: string, onEvent: (ev: any) => void) {
   const wsUrl = `${env.backend.replace(/^http/, "ws")}/ws/podcast?pid=${pid}`
   const ws = new WebSocket(wsUrl)
@@ -453,24 +474,49 @@ export function connectQuizStream(quizId: string, onEvent: (ev: QuizEvent) => vo
   }; ws.onerror = () => onEvent({ type: "error", error: "stream_error" } as any); return { ws, close: () => { try { ws.close() } catch { } } }
 }
 
+async function pollTranscribeJob(jobId: string) {
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const row = await req<TranscriptionResponse>(`${env.backend}/transcriber/${encodeURIComponent(jobId)}`, {
+      method: "GET",
+      timeout: 30000,
+    });
+    if (row.status === "pending") {
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    if (row.status === "error" || row.ok === false) {
+      throw new ApiError(row.error || "Transcription failed", 500);
+    }
+    return row;
+  }
+  throw new ApiError("Transcription took too long. Try a shorter video.", 504);
+}
+
 export async function transcribeAudio(file: File) {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append("file", file);
 
-  return req<TranscriptionResponse>(`${env.backend}/transcriber`, {
-    method: 'POST',
+  const started = await req<TranscriptionResponse>(`${env.backend}/transcriber`, {
+    method: "POST",
     body: formData,
     timeout: Math.max(env.timeout, 180000),
   });
+  if (started.transcription) return started;
+  if (!started.jobId) throw new ApiError(started.error || "Transcription failed to start", 500);
+  return pollTranscribeJob(started.jobId);
 }
 
 export async function transcribeYouTube(youtubeUrl: string) {
-  return req<TranscriptionResponse>(`${env.backend}/transcriber`, {
+  const started = await req<TranscriptionResponse>(`${env.backend}/transcriber`, {
     method: "POST",
     headers: jsonHeaders({}),
     body: JSON.stringify({ youtubeUrl }),
-    timeout: Math.max(env.timeout, 300000),
+    timeout: Math.max(env.timeout, 60000),
   });
+  if (started.transcription) return started;
+  if (!started.jobId) throw new ApiError(started.error || "Transcription failed to start", 500);
+  return pollTranscribeJob(started.jobId);
 }
 
 export type PlannerTask = {
@@ -539,11 +585,16 @@ export async function plannerPlan(id: string, cram?: boolean) {
   })
 }
 
-export async function plannerWeekly(cram?: boolean) {
+export async function plannerWeekly(regenerate = false) {
+  if (!regenerate) {
+    return req<{ ok: boolean; plan: WeeklyPlan }>(`${env.backend}/planner/weekly`, {
+      method: "GET",
+    })
+  }
   return req<{ ok: boolean; plan: WeeklyPlan }>(`${env.backend}/planner/weekly`, {
     method: "POST",
     headers: jsonHeaders({}),
-    body: JSON.stringify({ cram: !!cram })
+    body: JSON.stringify({}),
   })
 }
 
@@ -568,7 +619,7 @@ export function connectPlannerStream(sid: string, onEvent: (ev: PlannerEvent) =>
   return { ws, close: () => { try { ws.close() } catch { } } }
 }
 
-export async function plannerUpdate(id: string, patch: Partial<PlannerTask>) {
+export async function plannerUpdate(id: string, patch: Partial<Omit<PlannerTask, "dueAt">> & { dueAt?: number | string }) {
   return req<{ ok: boolean; task: PlannerTask }>(`${env.backend}/tasks/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: jsonHeaders({}),

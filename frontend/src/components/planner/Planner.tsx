@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import PlannerMindmap from "./PlannerMindmap"
 import TodayFocus from "./TodayFocus"
 import QuickAdd from "./QuickAdd"
+import WeekBoard from "./WeekBoard"
+import MonthCalendar from "./MonthCalendar"
+import { dueMs, formatDue, toLocalInput } from "./date"
 import { connectPlannerStream, plannerDelete, plannerIngest, plannerList, plannerMaterials, plannerPlan, plannerUpdate, plannerWeekly, plannerCreateWithFiles, plannerUploadFiles, plannerDeleteFile, type PlannerEvent, type PlannerSlot, type PlannerTask, type WeeklyPlan } from "../../lib/api"
 
 function fmtTime(ts: number) {
@@ -38,7 +41,8 @@ export default function Planner() {
     const [materials, setMaterials] = useState<Record<string, any>>({})
     const [loadingStates, setLoadingStates] = useState<Record<string, { plan?: boolean; summary?: boolean; flashcards?: boolean }>>({})
     const wsRef = useRef<ReturnType<typeof connectPlannerStream> | null>(null)
-    const [view, setView] = useState<"today" | "list" | "mindmap">("today")
+    const [view, setView] = useState<"today" | "month" | "list" | "mindmap">("today")
+    const [calendarRange, setCalendarRange] = useState<"week" | "month">("week")
     const [selectedFiles, setSelectedFiles] = useState<File[]>([])
     const [notifications, setNotifications] = useState<Array<{ id: string; type: string; message: string; at: number }>>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -57,7 +61,7 @@ export default function Planner() {
         const out: Sug[] = []
         for (const t of tasks) {
             if (t.status === "done") continue
-            const hoursLeft = Math.max(0.1, (t.dueAt - now) / 3600000)
+            const hoursLeft = Math.max(0.1, (dueMs(t.dueAt) - now) / 3600000)
             const planned = slotsByTask[t.id]?.length || 0
             const nextSlot = (slotsByTask[t.id] || []).find(s => s.start >= now) || (slotsByTask[t.id] || [])[0]
             let score = (t.priority || 3) * (1 / hoursLeft) + (t.estMins || 60) * 0.002
@@ -262,6 +266,15 @@ export default function Planner() {
         setTasks(t => t.map(x => x.id === id ? task : x))
     }
 
+    const moveDue = async (id: string, dueAt: string) => {
+        const { task } = await plannerUpdate(id, { dueAt })
+        setTasks(t => t.map(x => x.id === id ? task : x))
+        try {
+            const wp = await plannerWeekly(false)
+            setPlan(wp.plan ?? null)
+        } catch { }
+    }
+
     const fmtRel = (ts: number) => {
         const d = ts - Date.now()
         const sign = d < 0 ? "ago" : "in"
@@ -281,6 +294,7 @@ export default function Planner() {
                 <div className="flex items-center gap-2">
                     <div className="text-xs bg-zinc-900 border border-zinc-800 rounded overflow-hidden">
                         <button onClick={() => setView("today")} className={`px-2 py-1 ${view === 'today' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'}`}>Today</button>
+                        <button onClick={() => setView("month")} className={`px-2 py-1 ${view === 'month' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'}`}>Month</button>
                         <button onClick={() => setView("list")} className={`px-2 py-1 ${view === 'list' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'}`}>List</button>
                         <button onClick={() => setView("mindmap")} className={`px-2 py-1 ${view === 'mindmap' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'}`}>Mindmap</button>
                     </div>
@@ -306,18 +320,31 @@ export default function Planner() {
                 )}
 
                 {view === 'today' ? (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2">
-                            <TodayFocus
-                                tasks={tasks}
-                                onStartSession={startNow}
-                                onCompleteTask={(id) => mark(id, "done")}
-                            />
+                    <div className="space-y-6">
+                        <div className="flex justify-end">
+                            <div className="text-xs bg-zinc-900 border border-zinc-800 rounded overflow-hidden">
+                                <button onClick={() => setCalendarRange("week")} className={`px-2 py-1 ${calendarRange === "week" ? "bg-zinc-800 text-zinc-100" : "text-zinc-300"}`}>Week</button>
+                                <button onClick={() => setCalendarRange("month")} className={`px-2 py-1 ${calendarRange === "month" ? "bg-zinc-800 text-zinc-100" : "text-zinc-300"}`}>Month</button>
+                            </div>
                         </div>
-                        <div>
-                            <QuickAdd onAdd={add} loading={loading} />
+                        {calendarRange === "month"
+                            ? <MonthCalendar tasks={tasks} onMoveDue={moveDue} />
+                            : <WeekBoard tasks={tasks} onMoveDue={moveDue} />}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2">
+                                <TodayFocus
+                                    tasks={tasks}
+                                    onStartSession={startNow}
+                                    onCompleteTask={(id) => mark(id, "done")}
+                                />
+                            </div>
+                            <div>
+                                <QuickAdd onAdd={add} loading={loading} />
+                            </div>
                         </div>
                     </div>
+                ) : view === 'month' ? (
+                    <MonthCalendar tasks={tasks} onMoveDue={moveDue} />
                 ) : view === 'mindmap' ? (
                     <div className="rounded-xl border border-zinc-800 overflow-hidden h-[75vh]">
                         <PlannerMindmap
@@ -340,9 +367,15 @@ export default function Planner() {
                                     <div className="min-w-0">
                                         <div className="text-zinc-100 font-medium truncate">{t.title}</div>
                                         <div className="text-zinc-400 text-xs">
-                                            Due {fmtTime(t.dueAt)} · {t.estMins} mins · P{t.priority}
+                                            Due {formatDue(t.dueAt)} · {t.estMins} mins · P{t.priority}
                                             {t.files && t.files.length > 0 && ` · ${t.files.length} file(s)`}
                                         </div>
+                                        <input
+                                            type="datetime-local"
+                                            value={toLocalInput(t.dueAt)}
+                                            onChange={e => { if (e.target.value) void moveDue(t.id, new Date(e.target.value).toISOString()) }}
+                                            className="mt-2 bg-stone-900 border border-zinc-800 text-stone-200 text-xs rounded px-2 py-1"
+                                        />
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <select value={t.status} onChange={e => mark(t.id, e.target.value as any)} className="bg-stone-900 border border-zinc-800 text-stone-200 text-xs rounded px-2 py-1">

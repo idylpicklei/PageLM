@@ -1,10 +1,5 @@
-import { useState, useEffect } from "react"
 import { type PlannerTask } from "../../lib/api"
-
-function fmtTime(ts: number) {
-    const d = new Date(ts)
-    return d.toLocaleString(undefined, { hour: "2-digit", minute: "2-digit" })
-}
+import { dueMs, formatDue, localDateKey } from "./date"
 
 interface TodayFocusProps {
     tasks: PlannerTask[]
@@ -13,23 +8,16 @@ interface TodayFocusProps {
 }
 
 export default function TodayFocus({ tasks, onStartSession, onCompleteTask }: TodayFocusProps) {
-    const today = new Date().toISOString().slice(0, 10)
-
-    // Get today's tasks and upcoming urgent tasks
-    const dueMs = (t: PlannerTask) => {
-        const n = typeof t.dueAt === "number" ? t.dueAt : Date.parse(String(t.dueAt ?? ""))
-        return Number.isFinite(n) ? n : NaN
-    }
+    const today = localDateKey()
 
     const todayTasks = tasks.filter(t => {
-        const ms = dueMs(t)
+        const ms = dueMs(t.dueAt)
         if (!Number.isFinite(ms)) return false
-        const taskDate = new Date(ms).toISOString().slice(0, 10)
-        return taskDate === today && t.status !== 'done'
+        return localDateKey(new Date(ms)) === today && t.status !== 'done'
     })
 
     const urgentTasks = tasks.filter(t => {
-        const ms = dueMs(t)
+        const ms = dueMs(t.dueAt)
         if (!Number.isFinite(ms)) return false
         const hoursUntilDue = (ms - Date.now()) / (1000 * 60 * 60)
         return hoursUntilDue < 24 && hoursUntilDue > 0 && t.status !== 'done'
@@ -56,7 +44,7 @@ export default function TodayFocus({ tasks, onStartSession, onCompleteTask }: To
                                         <div>
                                             <div className="text-blue-200 font-medium">{task.title}</div>
                                             <div className="text-blue-300 text-xs">
-                                                {task.course} • {task.estMins} mins • Due {fmtTime(task.dueAt)}
+                                                {task.course} • {task.estMins} mins • Due {formatDue(task.dueAt)}
                                             </div>
                                         </div>
                                         <button
@@ -110,7 +98,7 @@ export default function TodayFocus({ tasks, onStartSession, onCompleteTask }: To
                         <div className="text-zinc-300 text-sm mb-2">Urgent (Next 24h):</div>
                         <div className="space-y-2">
                             {urgentTasks.map(task => {
-                                const hoursLeft = Math.max(0, (task.dueAt - Date.now()) / (1000 * 60 * 60))
+                                const hoursLeft = Math.max(0, (dueMs(task.dueAt) - Date.now()) / (1000 * 60 * 60))
                                 return (
                                     <div key={task.id} className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3">
                                         <div className="flex items-center justify-between">

@@ -42,7 +42,7 @@ export const config = {
   ffmpeg: process.env.FFMPEG_PATH || 'ffmpeg',
   gemini_tts_model: process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts',
   tts_voice_gemini: process.env.TTS_VOICE_GEMINI || 'Kore',
-  tts_voice_alt_gemini: process.env.TTS_VOICE_ALT_GEMINI || 'Puck',
+  tts_voice_alt_gemini: process.env.TTS_VOICE_ALT_GEMINI || 'Charon',
   tts_voice_edge: process.env.TTS_VOICE_EDGE || 'en-US-AvaNeural',
   tts_voice_alt_edge: process.env.TTS_VOICE_ALT_EDGE || 'en-US-AndrewNeural',
   eleven_api_key: process.env.ELEVEN_API_KEY || '',
@@ -54,7 +54,7 @@ export const config = {
   speech_sdk_model: process.env.SPEECH_SDK_MODEL || 'openai/gpt-4o-mini-tts',
   speech_sdk_voice_a: process.env.SPEECH_SDK_VOICE_A || 'alloy',
   speech_sdk_voice_b: process.env.SPEECH_SDK_VOICE_B || 'echo',
-  transcription_provider: process.env.TRANSCRIPTION_PROVIDER || 'openai',
+  transcription_provider: process.env.TRANSCRIPTION_PROVIDER || 'gemini',
   assemblyai_api_key: process.env.ASSEMBLYAI_API_KEY || '',
   google_project_id: process.env.GOOGLE_CLOUD_PROJECT_ID || '',
 }

@@ -5,6 +5,35 @@ import { planTask, planTasks, weeklyPlan, defaultPolicy } from "./scheduler"
 import { handleAsk } from "../../lib/ai/ask"
 import crypto from "crypto"
 
+function normalizeDueAt(value: unknown): string | null {
+    if (value == null || value === "") return null
+    if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString()
+    if (typeof value === "string") {
+        if (/^\d+$/.test(value)) {
+            const n = Number(value)
+            if (Number.isFinite(n)) return new Date(n).toISOString()
+        }
+        const d = new Date(value)
+        if (!Number.isNaN(d.getTime())) return d.toISOString()
+    }
+    return null
+}
+
+function shiftSlotsByDueChange(slots: Slot[], fromDue: string, toDue: string): Slot[] {
+    const from = new Date(fromDue)
+    const to = new Date(toDue)
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return slots
+    const fromDay = new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime()
+    const toDay = new Date(to.getFullYear(), to.getMonth(), to.getDate()).getTime()
+    const delta = toDay - fromDay
+    if (!delta) return slots
+    return slots.map((s) => ({
+        ...s,
+        start: new Date(new Date(s.start).getTime() + delta).toISOString(),
+        end: new Date(new Date(s.end).getTime() + delta).toISOString(),
+    }))
+}
+
 export class PlannerService {
     private policy: PlanPolicy
 
@@ -70,13 +99,29 @@ export class PlannerService {
         const existing = await getTask(id)
         if (!existing) return null
 
+        const patch: UpdateTaskRequest = { ...req }
+        if (patch.dueAt != null) {
+            const iso = normalizeDueAt(patch.dueAt)
+            if (!iso) {
+                delete patch.dueAt
+            } else {
+                if (existing.plan?.slots?.length && existing.dueAt) {
+                    patch.plan = {
+                        ...existing.plan,
+                        slots: shiftSlotsByDueChange(existing.plan.slots, existing.dueAt, iso),
+                    }
+                }
+                patch.dueAt = iso
+            }
+        }
+
         let steps = existing.steps
-        if (req.title || req.type || req.notes) {
-            const updatedTask = { ...existing, ...req }
+        if (patch.title || patch.type || patch.notes) {
+            const updatedTask = { ...existing, ...patch }
             steps = await generateSteps(updatedTask)
         }
 
-        return updateTask(id, { ...req, steps })
+        return updateTask(id, { ...patch, steps })
     }
 
     async deleteTask(id: string): Promise<boolean> {
@@ -111,6 +156,11 @@ export class PlannerService {
         const plan = weeklyPlan(plannedTasks, policy)
 
         return { tasks: plannedTasks, plan }
+    }
+
+    async getWeeklyPlan(): Promise<{ tasks: Task[]; plan: any }> {
+        const tasks = (await listTasks()).filter((t) => t.status !== "done")
+        return { tasks, plan: weeklyPlan(tasks, this.policy) }
     }
 
     async getTodaySessions(): Promise<{ task: Task; slots: Slot[] }[]> {

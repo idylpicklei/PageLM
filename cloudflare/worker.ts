@@ -152,6 +152,7 @@ function buildContainerEnv(request: Request, env: Env): Record<string, string> {
     "TTS_VOICE_GEMINI",
     "TTS_VOICE_ALT_GEMINI",
     "TTS_PROVIDER",
+    "TRANSCRIPTION_PROVIDER",
     "ELEVEN_VOICE_A",
     "ELEVEN_VOICE_B",
   ];
@@ -215,7 +216,8 @@ export default {
 
     if (url.pathname.startsWith("/auth")) {
       try {
-        const authResponse = await handleAuthRoutes(request, env.DB, url.pathname);
+        const allowSignup = String(env.ALLOW_SIGNUP || "").toLowerCase() === "true";
+        const authResponse = await handleAuthRoutes(request, env.DB, url.pathname, { allowSignup });
         if (authResponse) return authResponse;
       } catch (err) {
         console.error("[auth]", err);

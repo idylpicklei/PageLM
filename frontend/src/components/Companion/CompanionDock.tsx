@@ -157,7 +157,7 @@ export default function CompanionDock() {
         <div ref={bodyRef} className="px-5 py-4 space-y-4 overflow-y-auto custom-scroll">
           {!hasDocument && (
             <div className="text-sm text-stone-400">
-              Open a note or topic to unlock the companion. It will only use the content of that document for answers.
+              Open a note or topic to let Dylan help. He will only use the content of that document for answers.
             </div>
           )}
 

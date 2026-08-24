@@ -1,5 +1,8 @@
 import { OpenAI } from 'openai';
 import fs from 'fs';
+import path from 'path';
+import { spawn } from 'child_process';
+import llm from '../../utils/llm/llm';
 import { config } from '../../config/env';
 
 export type TranscriptionProvider = 'openai' | 'google' | 'assemblyai' | 'elevenlabs' | 'gemini';
@@ -66,19 +69,15 @@ export async function transcribeYouTube(youtubeUrl: string): Promise<Transcripti
     const url = normalizeYouTubeUrl(youtubeUrl);
     if (!url) throw new Error('Enter a public YouTube watch, shorts, or youtu.be link');
 
-    const key = geminiApiKey();
-    if (!key) throw new Error('Gemini API key is not configured');
+    const payload = await geminiGenerateFromParts([
+        { text: STUDY_TRANSCRIPT_PROMPT + '\nRules: public-video content only. If there is little speech, transcribe what you can.' },
+        { file_data: { file_uri: url } },
+    ], 'Gemini could not watch that video. Use a public YouTube link (not private or unlisted).');
 
-    const model = config.gemini_model || 'gemini-3.5-flash';
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
-    const r = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{
-                parts: [
-                    {
-                        text: `Watch this YouTube video and return ONLY valid JSON with this shape:
+    return resultFromPayload(payload, 'YouTube');
+}
+
+const STUDY_TRANSCRIPT_PROMPT = `Watch or listen to this media and return ONLY valid JSON with this shape:
 {
   "transcription": "full spoken transcript, as faithful as possible",
   "summary": "2-3 sentence overview",
@@ -93,35 +92,11 @@ export async function transcribeYouTube(youtubeUrl: string): Promise<Transcripti
     "takeaways": ["..."]
   }
 }
-Rules: public-video content only. No markdown fences. If there is little speech, transcribe what you can and still fill study fields.`,
-                    },
-                    { file_data: { file_uri: url } },
-                ],
-            }],
-        }),
-    });
+No markdown fences.`;
 
-    const raw = await r.text();
-    if (!r.ok) {
-        if (r.status === 400 || r.status === 403 || r.status === 404) {
-            throw new Error('Gemini could not watch that video. Use a public YouTube link (not private or unlisted).');
-        }
-        throw new Error(`Gemini YouTube request failed (${r.status})`);
-    }
-
-    let payload: any = {};
-    try {
-        const data = JSON.parse(raw) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('\n').trim() || '';
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        payload = jsonMatch ? JSON.parse(jsonMatch[0]) : { transcription: text };
-    } catch {
-        throw new Error('Gemini returned an unreadable transcript for that video');
-    }
-
+function resultFromPayload(payload: any, category: string): TranscriptionResult {
     const text = String(payload.transcription || payload.transcript || '').trim();
     if (!text) throw new Error('No transcript could be generated from that video');
-
     return {
         text,
         provider: 'gemini',
@@ -129,7 +104,7 @@ Rules: public-video content only. No markdown fences. If there is little speech,
             summary: payload.summary || '',
             keyPoints: payload.keyPoints || [],
             topics: payload.topics || [],
-            categories: payload.categories || ['YouTube'],
+            categories: payload.categories || [category],
             searchableKeywords: payload.searchableKeywords || [],
             studyGuide: {
                 mainConcepts: payload.studyGuide?.mainConcepts || [],
@@ -141,7 +116,121 @@ Rules: public-video content only. No markdown fences. If there is little speech,
     };
 }
 
-export async function transcribeAudio(filePath: string, provider: TranscriptionProvider = 'openai'): Promise<TranscriptionResult> {
+function toModelText(out: any): string {
+    if (!out) return '';
+    if (typeof out === 'string') return out;
+    if (typeof out?.content === 'string') return out.content;
+    if (Array.isArray(out?.content)) return out.content.map((p: any) => (typeof p === 'string' ? p : p?.text ?? '')).join('');
+    return String(out?.content || '');
+}
+
+async function geminiGenerateFromParts(parts: unknown[], notFoundMessage: string): Promise<any> {
+    const key = geminiApiKey();
+    if (!key) throw new Error('Gemini API key is not configured');
+    const model = config.gemini_model || 'gemini-3.5-flash';
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts }] }),
+        signal: AbortSignal.timeout(8 * 60 * 1000),
+    });
+    const raw = await r.text();
+    if (!r.ok) {
+        if (r.status === 400 || r.status === 403 || r.status === 404) throw new Error(notFoundMessage);
+        throw new Error(`Gemini request failed (${r.status})`);
+    }
+    try {
+        const data = JSON.parse(raw) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('\n').trim() || '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        return jsonMatch ? JSON.parse(jsonMatch[0]) : { transcription: text };
+    } catch {
+        throw new Error('Gemini returned an unreadable transcript');
+    }
+}
+
+function extractAudio(input: string): Promise<string> {
+    const out = `${input}.mp3`;
+    return new Promise((resolve, reject) => {
+        const p = spawn(config.ffmpeg || 'ffmpeg', ['-y', '-i', input, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '64k', out], { stdio: 'pipe' });
+        p.on('close', (code) => {
+            if (code === 0 && fs.existsSync(out)) resolve(out);
+            else reject(new Error('Could not extract audio from that video'));
+        });
+        p.on('error', () => reject(new Error('ffmpeg is not available to process video')));
+    });
+}
+
+async function uploadGeminiFile(filePath: string, mimeType: string): Promise<string> {
+    const key = geminiApiKey();
+    if (!key) throw new Error('Gemini API key is not configured');
+    const body = fs.readFileSync(filePath);
+    const start = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(key)}`, {
+        method: 'POST',
+        headers: {
+            'X-Goog-Upload-Protocol': 'resumable',
+            'X-Goog-Upload-Command': 'start',
+            'X-Goog-Upload-Header-Content-Length': String(body.length),
+            'X-Goog-Upload-Header-Content-Type': mimeType,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ file: { display_name: path.basename(filePath) } }),
+    });
+    const uploadUrl = start.headers.get('x-goog-upload-url');
+    if (!start.ok || !uploadUrl) throw new Error('Could not start Gemini file upload');
+    const finish = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Length': String(body.length),
+            'X-Goog-Upload-Offset': '0',
+            'X-Goog-Upload-Command': 'upload, finalize',
+        },
+        body,
+    });
+    const uploaded = await finish.json() as { file?: { uri?: string; name?: string; state?: string } };
+    let file = uploaded.file;
+    for (let i = 0; i < 30 && file?.name && file.state && file.state !== 'ACTIVE'; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const poll = await fetch(`https://generativelanguage.googleapis.com/v1beta/${file.name}?key=${encodeURIComponent(key)}`);
+        const next = await poll.json() as { state?: string; uri?: string; name?: string };
+        file = { uri: next.uri || file.uri, name: next.name || file.name, state: next.state };
+    }
+    if (!file?.uri) throw new Error('Gemini did not finish processing that file');
+    return file.uri;
+}
+
+export async function transcribeMediaFile(filePath: string, mimeType: string): Promise<TranscriptionResult> {
+    let workPath = filePath;
+    let workMime = mimeType || 'application/octet-stream';
+    if (workMime.startsWith('video/') || !workMime.startsWith('audio/')) {
+        try {
+            workPath = await extractAudio(filePath);
+            workMime = 'audio/mpeg';
+        } catch (err) {
+            if (workMime.startsWith('video/')) throw err;
+        }
+    }
+    const size = fs.statSync(workPath).size;
+    if (size > 80 * 1024 * 1024) {
+        throw new Error('That video is too long for transcription. Try a shorter clip.');
+    }
+    const parts: unknown[] = [{ text: STUDY_TRANSCRIPT_PROMPT }];
+    if (size > 18 * 1024 * 1024) {
+        const uri = await uploadGeminiFile(workPath, workMime);
+        parts.push({ file_data: { mime_type: workMime, file_uri: uri } });
+    } else {
+        parts.push({ inline_data: { mime_type: workMime, data: fs.readFileSync(workPath).toString('base64') } });
+    }
+    const payload = await geminiGenerateFromParts(parts, 'Gemini could not read that audio or video file.');
+    return resultFromPayload(payload, 'Recording');
+}
+
+export async function transcribeAudio(filePath: string, provider: TranscriptionProvider = 'gemini', mimeType = 'audio/webm'): Promise<TranscriptionResult> {
+    if (provider === 'gemini' || mimeType.startsWith('video/') || !config.openai) {
+        return transcribeMediaFile(filePath, mimeType);
+    }
+
     let result: TranscriptionResult;
 
     switch (provider) {
@@ -376,23 +465,18 @@ Please provide a JSON response with the following structure:
 
 Make it educational and useful for studying. Focus on extracting the most important information for learning purposes.`;
 
-        const completion = await getOpenAI().chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-                {
-                    role: 'system',
-                    content: 'You are an expert educational content analyzer. Create comprehensive study materials from transcriptions. Always respond with valid JSON only.'
-                },
-                {
-                    role: 'user',
-                    content: prompt
-                }
-            ],
-            temperature: 0.3,
-            max_tokens: 2000,
-        });
+        const completion = await llm.invoke([
+            {
+                role: 'system',
+                content: 'You are an expert educational content analyzer. Create comprehensive study materials from transcriptions. Always respond with valid JSON only.'
+            },
+            {
+                role: 'user',
+                content: prompt
+            }
+        ] as any);
 
-        const responseText = completion.choices[0]?.message?.content?.trim();
+        const responseText = toModelText(completion).trim();
         if (!responseText) {
             throw new Error('No response from AI');
         }

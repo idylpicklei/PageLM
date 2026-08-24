@@ -3,6 +3,13 @@ import { makeSlots, calculateUrgencyScore } from "./ai"
 
 const DAY_MS = 24 * 3600 * 1000
 
+export function localDateKey(d: Date): string {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    const day = String(d.getDate()).padStart(2, "0")
+    return `${y}-${m}-${day}`
+}
+
 export function defaultPolicy(cram = false): PlanPolicy {
     return { pomodoroMins: 25, breakMins: 5, maxDailyMins: cram ? 360 : 240, cram }
 }
@@ -41,14 +48,15 @@ export function weeklyPlan(tasks: Task[], policy: PlanPolicy): WeeklyPlan {
 
     for (let i = 0; i < 7; i++) {
         const d = new Date(start.getTime() + i * DAY_MS)
-        days.push({ date: d.toISOString().slice(0, 10), slots: [] })
+        days.push({ date: localDateKey(d), slots: [] })
     }
 
     for (const task of tasks) {
         const taskSlots = task.plan?.slots || []
         for (const slot of taskSlots) {
             const slotDate = new Date(slot.start)
-            const dayIndex = Math.floor((slotDate.getTime() - start.getTime()) / DAY_MS)
+            const slotMidnight = new Date(slotDate.getFullYear(), slotDate.getMonth(), slotDate.getDate())
+            const dayIndex = Math.round((slotMidnight.getTime() - start.getTime()) / DAY_MS)
             if (dayIndex >= 0 && dayIndex < 7) {
                 days[dayIndex].slots.push(slot)
             }

@@ -240,12 +240,15 @@ async function writeGeminiAudio(pcm: Buffer, mimeType: string, file: string): Pr
 
 async function synth_gemini(segs: TSeg[], dir: string, base: string, emit?: (m: any) => void) {
   const v0 = config.tts_voice_gemini || "Kore"
-  const v1 = config.tts_voice_alt_gemini || "Puck"
-  const usable = segs.map((s, i) => ({
-    text: speakable(s.text),
-    speaker: (s.speaker || (i % 2 ? "B" : "A")).replace(/[^A-Za-z0-9]/g, "") || (i % 2 ? "B" : "A"),
-    voice: geminiVoice(s.voice, i % 2 ? v1 : v0),
-  })).filter((s) => s.text)
+  const v1 = config.tts_voice_alt_gemini || "Charon"
+  const usable = segs.map((s, i) => {
+    const speaker = (s.speaker || (i % 2 ? "B" : "A")).replace(/[^A-Za-z0-9]/g, "") || (i % 2 ? "B" : "A")
+    return {
+      text: speakable(s.text),
+      speaker,
+      voice: geminiVoice(undefined, speaker.toUpperCase() === "B" ? v1 : v0),
+    }
+  }).filter((s) => s.text)
 
   if (!usable.length) throw new Error("gemini_tts_no_text")
 
@@ -256,6 +259,7 @@ async function synth_gemini(segs: TSeg[], dir: string, base: string, emit?: (m: 
       const prompt = [
         `TTS the following conversation between ${speakers[0][0]} and ${speakers[1][0]}.`,
         "Read each line exactly, naturally, as a lively podcast.",
+        `${speakers[1][0]} has a deep, resonant male voice.`,
         ...usable.map((s) => `${s.speaker}: ${s.text}`),
       ].join("\n")
       const { pcm, mimeType } = await geminiTtsRequest(prompt, {

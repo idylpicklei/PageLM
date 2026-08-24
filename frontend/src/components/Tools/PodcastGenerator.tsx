@@ -1,6 +1,31 @@
-import { useState, useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useLocation } from "react-router-dom"
-import { podcastStart, connectPodcastStream, type PodcastEvent } from "../../lib/api"
+import {
+  connectPodcastStream,
+  listPodcasts,
+  podcastDownloadUrl,
+  podcastStart,
+  type PodcastEvent,
+  type PodcastItem,
+} from "../../lib/api"
+import { env } from "../../config/env"
+
+const GENERATE_TIMEOUT_MS = 10 * 60 * 1000
+
+function mediaUrl(file?: string, pid?: string, filename?: string) {
+  if (pid && filename) return podcastDownloadUrl(pid, filename)
+  if (!file) return ""
+  if (file.startsWith("http://") || file.startsWith("https://")) {
+    try {
+      const u = new URL(file)
+      if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+        return `${env.backend}${u.pathname}`
+      }
+    } catch {}
+    return file
+  }
+  return `${env.backend}${file.startsWith("/") ? file : `/${file}`}`
+}
 
 export default function PodcastGenerator() {
   const location = useLocation()
@@ -9,116 +34,109 @@ export default function PodcastGenerator() {
   const [status, setStatus] = useState("")
   const [audioFile, setAudioFile] = useState<string | null>(null)
   const [audioFilename, setAudioFilename] = useState<string | null>(null)
+  const [podcasts, setPodcasts] = useState<PodcastItem[]>([])
+  const audioFileRef = useRef<string | null>(null)
+  const closeRef = useRef<(() => void) | null>(null)
+
+  const showAudio = (file?: string, filename?: string, pid?: string) => {
+    const url = mediaUrl(file, pid, filename)
+    if (!url) return
+    audioFileRef.current = url
+    setAudioFile(url)
+    setAudioFilename(filename || "podcast.mp3")
+  }
+
+  const refreshList = async () => {
+    try {
+      const res = await listPodcasts()
+      setPodcasts(res.podcasts || [])
+    } catch {
+      // listing is best-effort; generation still works without it
+    }
+  }
+
+  const listen = (pid: string) => {
+    closeRef.current?.()
+    const { close } = connectPodcastStream(pid, async (ev: PodcastEvent) => {
+      if (ev.type === "ready") setStatus("Connected, generating…")
+      if (ev.type === "phase" && ev.value) setStatus(ev.value)
+      if (ev.type === "script") setStatus("Script ready, creating audio…")
+      if (ev.type === "audio") {
+        showAudio(ev.file || ev.staticUrl, ev.filename, ev.pid || pid)
+        setStatus("Podcast ready")
+      }
+      if (ev.type === "done") {
+        showAudio(ev.file, ev.filename, ev.pid || pid)
+        try {
+          const res = await listPodcasts()
+          const items = res.podcasts || []
+          setPodcasts(items)
+          if (!audioFileRef.current) {
+            const mine = items.find((p) => p.pid === pid)
+            if (mine) showAudio(mine.url, mine.filename, mine.pid)
+          }
+        } catch {}
+        setStatus(audioFileRef.current ? "Podcast ready" : "Done")
+        setBusy(false)
+        setTimeout(close, 1000)
+      }
+      if (ev.type === "error") {
+        setStatus(`Error: ${ev.error}`)
+        close()
+        setBusy(false)
+      }
+    })
+    closeRef.current = close
+    return close
+  }
 
   useEffect(() => {
-    // Check if we were navigated here with a podcast already started
-    if (location.state?.podcastPid) {
-      const { podcastPid, podcastTopic } = location.state
-      setTopic(podcastTopic || "")
-      setBusy(true)
-      setStatus("Connecting to podcast generation...")
+    void refreshList()
+    return () => closeRef.current?.()
+  }, [])
 
-      // Connect to the existing podcast stream
-      const { close } = connectPodcastStream(podcastPid, (ev: PodcastEvent) => {
-        if (ev.type === "ready") {
-          setStatus("Connected, generating...")
-        }
-        if (ev.type === "phase") {
-          setStatus(`Status: ${ev.value}`)
-        }
-        if (ev.type === "script") {
-          setStatus("Script generated, creating audio...")
-        }
-        if (ev.type === "audio") {
-          const audioUrl = ev.file || ev.staticUrl || ""
-          setAudioFile(audioUrl)
-          setAudioFilename(ev.filename || "podcast.mp3")
-          setStatus("Ready - Audio file is ready!")
-        }
-        if (ev.type === "done") {
-          setStatus("Done")
-          setBusy(false)
-          setTimeout(() => {
-            close()
-          }, 1000)
-        }
-        if (ev.type === "error") {
-          setStatus(`Error: ${ev.error}`)
-          close()
-          setBusy(false)
-        }
-      })
-
-      const timeout = setTimeout(() => {
-        setStatus("Error: Timeout - generation took too long")
-        setBusy(false)
-        close()
-      }, 120000)
-
-      return () => {
-        clearTimeout(timeout)
-        close()
-      }
+  useEffect(() => {
+    const podcastPid = location.state?.podcastPid as string | undefined
+    if (!podcastPid) return
+    setTopic(location.state?.podcastTopic || "")
+    setBusy(true)
+    setStatus("Connecting to podcast generation…")
+    const close = listen(podcastPid)
+    const timeout = setTimeout(() => {
+      setStatus("Error: Timeout — generation took too long. Check Saved podcasts below if the file finished.")
+      setBusy(false)
+      close()
+      void refreshList()
+    }, GENERATE_TIMEOUT_MS)
+    return () => {
+      clearTimeout(timeout)
+      close()
     }
-  }, [location.state])
+  }, [location.state?.podcastPid])
 
   const onGenerate = async () => {
     if (!topic.trim() || busy) return
 
     setBusy(true)
     setStatus("Starting…")
+    audioFileRef.current = null
     setAudioFile(null)
     setAudioFilename(null)
 
     try {
       const { pid } = await podcastStart({ topic })
-
-      await new Promise(resolve => setTimeout(resolve, 100))
-
-      const { close } = connectPodcastStream(pid, (ev: PodcastEvent) => {
-        if (ev.type === "ready") {
-          setStatus("Connected, generating...")
-        }
-        if (ev.type === "phase") {
-          setStatus(`Status: ${ev.value}`)
-        }
-        if (ev.type === "script") {
-          setStatus("Script generated, creating audio...")
-        }
-        if (ev.type === "audio") {
-          const audioUrl = ev.file || ev.staticUrl || ""
-
-          setAudioFile(audioUrl)
-          setAudioFilename(ev.filename || "podcast.mp3")
-          setStatus("Ready - Audio file is ready!")
-        }
-        if (ev.type === "done") {
-          setStatus("Done")
-          setBusy(false)
-          setTimeout(() => {
-            close()
-          }, 1000)
-        }
-        if (ev.type === "error") {
-          setStatus(`Error: ${ev.error}`)
-          close()
-          setBusy(false)
-        }
-      })
-
+      const close = listen(pid)
       const timeout = setTimeout(() => {
-        setStatus("Error: Timeout - generation took too long")
+        setStatus("Error: Timeout — generation took too long. Check Saved podcasts below if the file finished.")
         setBusy(false)
         close()
-      }, 120000)
-
-      const originalClose = close
-      const closeWithCleanup = () => {
+        void refreshList()
+      }, GENERATE_TIMEOUT_MS)
+      const prev = closeRef.current
+      closeRef.current = () => {
         clearTimeout(timeout)
-        originalClose()
+        prev?.()
       }
-
-      return { close: closeWithCleanup }
     } catch (e: unknown) {
       setStatus((e as Error).message || "Failed")
       setBusy(false)
@@ -163,22 +181,14 @@ export default function PodcastGenerator() {
         {status && (
           <div className="p-4 rounded-xl bg-purple-950/40 border border-purple-800/40 text-purple-200 font-medium">
             {status}
-            <div className="text-xs mt-2 opacity-70">
-              Audio file: {audioFile ? 'Set' : 'Not set'} |
-              Busy: {busy ? 'Yes' : 'No'}
-            </div>
           </div>
         )}
 
         {audioFile && (
           <div className="space-y-3">
             <div className="p-4 rounded-xl bg-stone-900/70 border border-zinc-700">
-              <div className="text-sm text-stone-400 mb-2">Preview:</div>
-              <audio
-                controls
-                className="w-full"
-                src={audioFile}
-              >
+              <div className="text-sm text-stone-400 mb-2">Preview</div>
+              <audio controls className="w-full" src={audioFile}>
                 Your browser does not support the audio element.
               </audio>
             </div>
@@ -193,9 +203,37 @@ export default function PodcastGenerator() {
           </div>
         )}
 
-        {!audioFile && !busy && (
+        {podcasts.length > 0 && (
+          <div className="rounded-xl border border-zinc-800 bg-stone-900/40 p-3 space-y-2">
+            <div className="text-xs uppercase tracking-wide text-stone-400 font-semibold">Saved podcasts</div>
+            {podcasts.map((item) => {
+              const url = mediaUrl(item.url, item.pid, item.filename)
+              return (
+                <div key={`${item.pid}-${item.filename}`} className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0 text-sm text-stone-200 truncate">{item.title}</div>
+                  <button
+                    type="button"
+                    onClick={() => showAudio(item.url, item.filename, item.pid)}
+                    className="text-xs text-purple-300 hover:text-white"
+                  >
+                    Play
+                  </button>
+                  <a
+                    href={url}
+                    download={item.filename}
+                    className="text-xs text-emerald-300 hover:text-white"
+                  >
+                    Download
+                  </a>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {!audioFile && !busy && podcasts.length === 0 && (
           <div className="text-xs text-stone-500 text-center p-2">
-            Click Generate to create a podcast
+            Click Generate to create a podcast. When it finishes, a download button will appear here.
           </div>
         )}
       </div>

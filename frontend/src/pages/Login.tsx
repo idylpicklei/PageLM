@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { authLogin } from "../lib/api";
 import { useAuth } from "../components/AuthProvider";
 
@@ -72,13 +72,6 @@ export default function Login() {
             {busy ? "Signing in..." : "Sign in"}
           </button>
         </form>
-
-        <p className="mt-6 text-sm text-stone-500 text-center">
-          No account?{" "}
-          <Link to="/signup" className="text-stone-200 hover:text-white">
-            Create one
-          </Link>
-        </p>
       </div>
     </div>
   );

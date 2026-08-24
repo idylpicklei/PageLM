@@ -25,7 +25,7 @@ export default function Transcriber() {
 
     setBusy(true);
     setProcessing(true);
-    setStatus("Transcribing audio...");
+    setStatus("Transcribing… this can take a few minutes for video");
     setTranscription(null);
     setStudyMaterials(null);
     setConfidence(null);
@@ -55,7 +55,7 @@ export default function Transcriber() {
 
     setBusy(true);
     setProcessing(true);
-    setStatus("Watching YouTube video...");
+    setStatus("Watching YouTube video… this can take a few minutes");
     setTranscription(null);
     setStudyMaterials(null);
     setConfidence(null);

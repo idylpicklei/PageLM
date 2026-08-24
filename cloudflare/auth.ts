@@ -173,7 +173,12 @@ async function migrateLegacyKvToUser(db: D1Database, userId: string): Promise<vo
   }
 }
 
-export async function handleAuthRoutes(request: Request, db: D1Database, pathname: string): Promise<Response | null> {
+export async function handleAuthRoutes(
+  request: Request,
+  db: D1Database,
+  pathname: string,
+  options: { allowSignup?: boolean } = {}
+): Promise<Response | null> {
   if (pathname === "/auth/me" && request.method === "GET") {
     const user = await getSessionUser(request, db);
     if (!user) return json({ error: "unauthorized" }, { status: 401 });
@@ -189,6 +194,10 @@ export async function handleAuthRoutes(request: Request, db: D1Database, pathnam
   }
 
   if (pathname === "/auth/register" && request.method === "POST") {
+    if (!options.allowSignup) {
+      return json({ error: "account creation is disabled" }, { status: 403 });
+    }
+
     let body: { email?: string; password?: string };
     try {
       body = (await request.json()) as { email?: string; password?: string };
