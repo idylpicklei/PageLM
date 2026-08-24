@@ -27,9 +27,12 @@ export type StudyMaterials = {
     timestamps?: { time: number; content: string; topic: string; }[];
 };
 
-const openai = new OpenAI({
-    apiKey: config.openai,
-});
+function getOpenAI(): OpenAI {
+    if (!config.openai) {
+        throw new Error('OPENAI_API_KEY is required for this transcription provider');
+    }
+    return new OpenAI({ apiKey: config.openai });
+}
 
 export async function transcribeAudio(filePath: string, provider: TranscriptionProvider = 'openai'): Promise<TranscriptionResult> {
     let result: TranscriptionResult;
@@ -62,7 +65,7 @@ async function transcribeWithOpenAI(filePath: string): Promise<TranscriptionResu
     try {
         const audioFile = fs.createReadStream(filePath);
 
-        const transcription = await openai.audio.transcriptions.create({
+        const transcription = await getOpenAI().audio.transcriptions.create({
             file: audioFile,
             model: 'whisper-1',
         });
@@ -266,7 +269,7 @@ Please provide a JSON response with the following structure:
 
 Make it educational and useful for studying. Focus on extracting the most important information for learning purposes.`;
 
-        const completion = await openai.chat.completions.create({
+        const completion = await getOpenAI().chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
                 {

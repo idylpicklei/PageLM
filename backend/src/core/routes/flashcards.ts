@@ -1,4 +1,4 @@
-import db from '../../utils/database/keyv'
+import db from '../../utils/database/scoped-keyv'
 
 export function flashcardRoutes(app: any) {
   app.post('/flashcards', async (req: any, res: any) => {

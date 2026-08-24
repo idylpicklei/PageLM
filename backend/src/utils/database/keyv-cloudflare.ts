@@ -2,6 +2,7 @@ type KeyvLike = {
   get: (key: string) => Promise<any>;
   set: (key: string, value: any) => Promise<boolean>;
   delete: (key: string) => Promise<boolean>;
+  clear: () => Promise<void>;
 };
 
 function baseUrl(): string {
@@ -53,6 +54,10 @@ export function createCloudflareKeyvStore(): KeyvLike {
       });
       if (!r.ok && r.status !== 404) throw new Error(`KV delete failed: ${r.status}`);
       return true;
+    },
+
+    async clear() {
+      // No bulk-clear route; Keyv requires this method on the adapter.
     },
   };
 }

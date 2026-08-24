@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import PromptRail from "../components/Landing/PromptRail";
 import PromptBox from "../components/Landing/PromptBox";
 import ExploreTopics from "../components/Landing/ExploreTopics";
-import { chatMultipart, chatJSON } from "../lib/api";
+import { chatMultipart, chatJSON, isSlowDownError } from "../lib/api";
 
 export default function Landing() {
   const [prompt, setPrompt] = useState("");
@@ -51,8 +51,10 @@ export default function Landing() {
       }
       const r = await chatJSON({ q });
       navigate(`/chat?chatId=${encodeURIComponent(r.chatId)}&q=${encodeURIComponent(q)}`);
-    } catch {
-      adaptiveToast.error("Failed to start chat", "There was a problem reaching the AI. Please try sending your prompt again.");
+    } catch (err) {
+      if (!isSlowDownError(err)) {
+        adaptiveToast.error("Failed to start chat", "There was a problem reaching the AI. Please try sending your prompt again.");
+      }
     } finally {
       setBusy(false);
     }

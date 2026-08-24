@@ -7,7 +7,7 @@ const PROMPTS = [
   "Explain the basics of Photosynthesis.",
   "How do I write a compelling short story?",
   "What is Machine Learning and how does it work?",
-  "Teach me the fundamentals of cooking.",
+  "Teach me the fundamentals of accounting.",
   "Help me understand the French Revolution.",
   "Explain programming concepts.",
   "How do I manage my personal finances?",

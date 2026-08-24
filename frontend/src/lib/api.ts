@@ -1,3 +1,4 @@
+import { adaptiveToast } from "@cognicatch/react";
 import { env } from "../config/env";
 
 export type ChatStartResponse = { ok: true; chatId: string; stream: string };
@@ -78,6 +79,53 @@ export type ChatEvent =
 type O<T> = Promise<T>;
 type AnswerPayload = string | { answer: string; flashcards?: FlashCard[] };
 
+export class ApiError extends Error {
+  status: number;
+  retryAfter?: number;
+
+  constructor(message: string, status: number, retryAfter?: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
+
+export function isSlowDownError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 429;
+}
+
+function formatRetryWait(seconds?: number): string {
+  if (!seconds || seconds < 1) return "Try again in a moment.";
+  if (seconds < 60) return `Try again in about ${seconds} second${seconds === 1 ? "" : "s"}.`;
+  const minutes = Math.ceil(seconds / 60);
+  return `Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+}
+
+function parseErrorBody(txt: string): { message?: string; retryAfter?: number } {
+  try {
+    const data = JSON.parse(txt) as { message?: string; error?: string; retryAfter?: number };
+    return {
+      message: data.message || (data.error && data.error !== "rate_limited" ? data.error : undefined),
+      retryAfter: typeof data.retryAfter === "number" ? data.retryAfter : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function notifySlowDown(message: string, retryAfter?: number) {
+  adaptiveToast.error("Please slow down", `${message} ${formatRetryWait(retryAfter)}`.trim());
+}
+
+function notifyUsageWarning(message: string) {
+  const key = "pagelm.rateLimit.warnAt";
+  const last = Number(sessionStorage.getItem(key) || "0");
+  if (Date.now() - last < 60_000) return;
+  sessionStorage.setItem(key, String(Date.now()));
+  adaptiveToast.error("Please slow down", message);
+}
+
 const timeoutCtl = (ms: number) => {
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), ms);
@@ -86,15 +134,35 @@ const timeoutCtl = (ms: number) => {
 
 async function req<T = unknown>(
   url: string,
-  init: RequestInit & { timeout?: number } = {}
+  init: RequestInit & { timeout?: number; skipAuthRedirect?: boolean } = {}
 ): O<T> {
-  const { timeout = env.timeout, ...rest } = init;
+  const { timeout = env.timeout, skipAuthRedirect = false, ...rest } = init;
   const { signal, done } = timeoutCtl(timeout);
   try {
-    const r = await fetch(url, { signal, ...rest });
+    const r = await fetch(url, { signal, credentials: "include", ...rest });
+    if (r.status === 401 && !skipAuthRedirect) {
+      const path = window.location.pathname;
+      if (!path.startsWith("/login") && !path.startsWith("/signup")) {
+        window.location.href = "/login";
+      }
+      throw new ApiError("unauthorized", 401);
+    }
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
-      throw new Error(`http ${r.status}: ${txt || r.statusText}`);
+      const parsed = parseErrorBody(txt);
+      const retryAfterHeader = Number.parseInt(r.headers.get("Retry-After") || "", 10);
+      const retryAfter = parsed.retryAfter ?? (Number.isFinite(retryAfterHeader) ? retryAfterHeader : undefined);
+      const message =
+        parsed.message ||
+        (r.status === 429
+          ? "You're sending prompts too quickly. Please slow down and try again in a moment."
+          : txt || r.statusText);
+      if (r.status === 429) notifySlowDown(message, retryAfter);
+      throw new ApiError(message, r.status, retryAfter);
+    }
+    const warning = r.headers.get("X-RateLimit-Warning");
+    if (warning) {
+      notifyUsageWarning("You're sending a lot of prompts. Please slow down so we don't run out of AI usage.");
     }
     const ct = r.headers.get("content-type") || "";
     if (ct.includes("application/json")) return (await r.json()) as T;
@@ -117,6 +185,40 @@ function wsURL(path: string) {
 }
 
 export { wsURL };
+
+export type AuthUser = { id: string; email: string };
+
+export async function authMe() {
+  return req<{ ok: true; user: AuthUser }>(`${env.backend}/auth/me`, {
+    method: "GET",
+    skipAuthRedirect: true,
+  });
+}
+
+export async function authLogin(email: string, password: string) {
+  return req<{ ok: true; user: AuthUser }>(`${env.backend}/auth/login`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ email, password }),
+    skipAuthRedirect: true,
+  });
+}
+
+export async function authRegister(email: string, password: string) {
+  return req<{ ok: true; user: AuthUser }>(`${env.backend}/auth/register`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ email, password }),
+    skipAuthRedirect: true,
+  });
+}
+
+export async function authLogout() {
+  return req<{ ok: true }>(`${env.backend}/auth/logout`, {
+    method: "POST",
+    skipAuthRedirect: true,
+  });
+}
 
 export async function chatJSON(body: ChatJSONBody) {
   return req<ChatStartResponse>(`${env.backend}/chat`, {
@@ -312,15 +414,11 @@ export async function quizStart(topic: string) {
 }
 
 export async function podcastStart(payload: { topic: string }) {
-  const url = `${env.backend}/podcast`
-  const res = await fetch(url, {
+  return req<{ ok: true; pid: string; stream: string }>(`${env.backend}/podcast`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonHeaders({}),
     body: JSON.stringify(payload),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || "Failed to start podcast")
-  return data
+  });
 }
 
 export function connectPodcastStream(pid: string, onEvent: (ev: any) => void) {

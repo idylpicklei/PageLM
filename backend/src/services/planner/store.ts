@@ -1,4 +1,4 @@
-import db from "../../utils/database/keyv"
+import db from "../../utils/database/scoped-keyv"
 import crypto from "crypto"
 import { Task, TaskFile } from "./types"
 

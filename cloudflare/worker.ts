@@ -1,4 +1,15 @@
 import { Container, getContainer } from "@cloudflare/containers";
+import {
+  getSessionUser,
+  handleAuthRoutes,
+  injectUserHeaders,
+} from "./auth";
+import {
+  applyRateLimitHeaders,
+  consumePromptQuota,
+  isPromptRequest,
+  rateLimitedResponse,
+} from "./rate-limit";
 
 export interface Env {
   PAGELM_BACKEND: DurableObjectNamespace<PageLMContainer>;
@@ -34,7 +45,10 @@ const BACKEND_PREFIXES = [
   "/health",
 ];
 
-function isBackendRoute(pathname: string): boolean {
+const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup"]);
+
+function isBackendRoute(pathname: string, method = "GET"): boolean {
+  if (method === "GET" && SPA_GET_PATHS.has(pathname)) return false;
   return BACKEND_PREFIXES.some((p) =>
     p.endsWith("/") ? pathname.startsWith(p) : pathname === p || pathname.startsWith(p + "/")
   );
@@ -148,13 +162,40 @@ export class PageLMContainer extends Container {
   sleepAfter = "1h";
   enableInternet = true;
   pingEndpoint = "/health";
+
+  override async fetch(request: Request): Promise<Response> {
+    this.envVars = buildContainerEnv(request, this.env);
+    return super.fetch(request);
+  }
 }
 
-async function proxyToBackend(request: Request, env: Env): Promise<Response> {
-  const container = getContainer(env.PAGELM_BACKEND, "pagelm") as PageLMContainer;
-  container.envVars = buildContainerEnv(request, env);
-  await container.startAndWaitForPorts();
-  return container.fetch(request);
+async function proxyToBackend(request: Request, env: Env, pathname: string): Promise<Response> {
+  const container = getContainer(env.PAGELM_BACKEND, "pagelm");
+  if (pathname === "/health") {
+    return container.fetch(request);
+  }
+
+  const user = await getSessionUser(request, env.DB);
+  if (!user) return unauthorized();
+
+  const forwarded = injectUserHeaders(request, user);
+  if (!isPromptRequest(request.method, pathname)) {
+    return container.fetch(forwarded);
+  }
+
+  const quota = await consumePromptQuota(env.DB, user.id, env);
+  if (!quota.allowed) return rateLimitedResponse(quota);
+
+  const response = await container.fetch(forwarded);
+  if (!quota.warning) return response;
+
+  const headers = new Headers(response.headers);
+  applyRateLimitHeaders(headers, quota);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 export default {
@@ -165,9 +206,30 @@ export default {
       return handleKvRoutes(request, env);
     }
 
+    if (url.pathname.startsWith("/auth")) {
+      try {
+        const authResponse = await handleAuthRoutes(request, env.DB, url.pathname);
+        if (authResponse) return authResponse;
+      } catch (err) {
+        console.error("[auth]", err);
+        return new Response(JSON.stringify({ error: "auth_failed" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const upgrade = request.headers.get("Upgrade");
-    if (upgrade?.toLowerCase() === "websocket" || isBackendRoute(url.pathname)) {
-      return proxyToBackend(request, env);
+    if (upgrade?.toLowerCase() === "websocket" || isBackendRoute(url.pathname, request.method)) {
+      return proxyToBackend(request, env, url.pathname);
+    }
+
+    if (request.method === "GET" && SPA_GET_PATHS.has(url.pathname)) {
+      return env.ASSETS.fetch(new URL("/", request.url));
     }
 
     return env.ASSETS.fetch(request);

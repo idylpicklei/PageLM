@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { plannerList, type PlannerTask, type PlannerSlot } from "../../lib/api"
+import { type PlannerTask } from "../../lib/api"
 
 function fmtTime(ts: number) {
     const d = new Date(ts)
@@ -16,13 +16,22 @@ export default function TodayFocus({ tasks, onStartSession, onCompleteTask }: To
     const today = new Date().toISOString().slice(0, 10)
 
     // Get today's tasks and upcoming urgent tasks
+    const dueMs = (t: PlannerTask) => {
+        const n = typeof t.dueAt === "number" ? t.dueAt : Date.parse(String(t.dueAt ?? ""))
+        return Number.isFinite(n) ? n : NaN
+    }
+
     const todayTasks = tasks.filter(t => {
-        const taskDate = new Date(t.dueAt).toISOString().slice(0, 10)
+        const ms = dueMs(t)
+        if (!Number.isFinite(ms)) return false
+        const taskDate = new Date(ms).toISOString().slice(0, 10)
         return taskDate === today && t.status !== 'done'
     })
 
     const urgentTasks = tasks.filter(t => {
-        const hoursUntilDue = (t.dueAt - Date.now()) / (1000 * 60 * 60)
+        const ms = dueMs(t)
+        if (!Number.isFinite(ms)) return false
+        const hoursUntilDue = (ms - Date.now()) / (1000 * 60 * 60)
         return hoursUntilDue < 24 && hoursUntilDue > 0 && t.status !== 'done'
     }).slice(0, 3)
 

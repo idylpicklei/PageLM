@@ -3,7 +3,8 @@ import path from 'path'
 import fs from 'fs'
 import server from '../utils/server/server'
 import { registerRoutes } from './router'
-import { loggerMiddleware } from './middleware'
+import { loggerMiddleware, authMiddleware } from './middleware'
+import { bindUserFromRequest } from '../utils/user-context'
 import { ensureStorageDirs, hydrateAllFromR2, isCloudStorage, hydrateStoragePath, storageRoot } from '../utils/storage/store'
 
 try {
@@ -19,13 +20,25 @@ app.get('/health', (_req: any, res: any) => {
 })
 
 app.use(loggerMiddleware)
+app.use(authMiddleware)
 app.use(cors({
   origin: "*",
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-User-Email'],
   credentials: true,
 }));
 app.options('*', cors());
+
+const origWs = (app as any).ws.bind(app);
+(app as any).ws = (path: string, handler: (ws: any, req: any) => void) => {
+  origWs(path, (ws: any, req: any) => {
+    if (!bindUserFromRequest(req)) {
+      try { ws.close(4401, "unauthorized"); } catch { /* ignore */ }
+      return;
+    }
+    handler(ws, req);
+  });
+};
 
 if (isCloudStorage()) {
   app.use((req: any, res: any, next: any) => {
@@ -44,9 +57,7 @@ registerRoutes(app)
 
 async function start() {
   ensureStorageDirs()
-  if (isCloudStorage()) {
-    await hydrateAllFromR2()
-  } else {
+  if (!isCloudStorage()) {
     fs.mkdirSync(storageRoot(), { recursive: true })
   }
 
@@ -54,6 +65,9 @@ async function start() {
   const port = Number.parseInt(process.env.PORT || '5000')
   app.listen(port, host, () => {
     console.log(`[pagelm] running on ${host}:${port} (${process.env.STORAGE_BACKEND || 'local'} storage)`)
+    if (isCloudStorage()) {
+      hydrateAllFromR2().catch((err) => console.error('[storage] hydrate failed:', err))
+    }
   })
 }
 

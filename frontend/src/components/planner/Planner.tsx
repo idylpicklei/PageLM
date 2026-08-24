@@ -138,13 +138,22 @@ export default function Planner() {
     }, [])
 
     const reload = async () => {
-        const res = await plannerList()
-        setTasks(res.tasks)
-        const wp = await plannerWeekly(false)
-        setPlan(wp.plan)
+        try {
+            const res = await plannerList()
+            setTasks(Array.isArray(res.tasks) ? res.tasks : [])
+        } catch (err) {
+            console.error("planner list failed", err)
+            setTasks([])
+        }
+        try {
+            const wp = await plannerWeekly(false)
+            setPlan(wp.plan ?? null)
+        } catch (err) {
+            console.error("planner weekly failed", err)
+        }
     }
 
-    useEffect(() => { reload() }, [])
+    useEffect(() => { void reload() }, [])
 
     const add = async (data?: { text?: string; files?: File[] }) => {
         const taskText = data?.text || text

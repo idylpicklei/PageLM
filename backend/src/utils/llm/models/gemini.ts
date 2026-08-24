@@ -4,7 +4,7 @@ import type { MkLLM, MkEmb, EmbeddingsLike } from './types'
 
 export const makeLLM: MkLLM = (cfg: any) => {
   const m = new ChatGoogleGenerativeAI({
-    model: cfg.gemini_model || 'gemini-1.5-pro',
+    model: cfg.gemini_model || 'gemini-2.5-flash',
     apiKey: cfg.gemini || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY,
     temperature: cfg.temp ?? 1,
     topP: 0.9,

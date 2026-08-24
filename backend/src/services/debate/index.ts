@@ -1,5 +1,5 @@
 import llm from "../../utils/llm/llm";
-import db from "../../utils/database/keyv";
+import db from "../../utils/database/scoped-keyv";
 
 export type DebateMessage = {
     role: "user" | "assistant";

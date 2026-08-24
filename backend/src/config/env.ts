@@ -1,6 +1,10 @@
 import path from 'path'
 
-process.loadEnvFile(path.resolve(process.cwd(), '.env'))
+try {
+  process.loadEnvFile(path.resolve(process.cwd(), '.env'))
+} catch {
+  // Cloudflare Containers inject env vars; .env is only for local/dev
+}
 
 export const config = {
   db_mode: process.env.db_mode || 'json',
@@ -11,7 +15,7 @@ export const config = {
   openrouter: process.env.OPENROUTER_API_KEY || '',
   openrouter_model: process.env.openrouter_model || '',
   gemini: process.env.gemini || process.env.GOOGLE_API_KEY || '',
-  gemini_model: process.env.gemini_model || 'gemini-1.5-pro',
+  gemini_model: process.env.gemini_model || 'gemini-2.5-flash',
   gemini_embed_model: process.env.gemini_embed_model || 'gemini-embedding-001',
   openai: process.env.OPENAI_API_KEY || '',
   openai_embed: process.env.OPENAI_EMBED_API_KEY || '',

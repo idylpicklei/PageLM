@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import db from "../database/keyv";
+import db from "../database/scoped-keyv";
 
 export type ChatMeta = { id: string; title: string; at: number };
 export type ChatMsg = { role: "user" | "assistant"; content: any; at: number };
