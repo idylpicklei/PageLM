@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { env } from "../config/env";
-import { chatJSON, getChatDetail, type FlashCard, createFlashcard, listFlashcards, deleteFlashcard, getChats, type ChatMessage, type SavedFlashcard, podcastStart } from "../lib/api";
+import { chatJSON, getChatDetail, getResponseLength, type FlashCard, createFlashcard, listFlashcards, deleteFlashcard, getChats, type ChatMessage, type LibraryFile, type BagSkill, podcastStart, listLibraryFiles, clearLibraryFiles, ensureDefaultSkills } from "../lib/api";
 import MarkdownView from "../components/Chat/MarkdownView";
 import ActionRow from "../components/Chat/ActionRow";
 import FlashCards from "../components/Chat/FlashCards";
@@ -67,6 +67,8 @@ export default function Chat() {
   const [cards, setCards] = useState<FlashCard[]>([]);
   const [bagOpen, setBagOpen] = useState(false);
   const [bag, setBag] = useState<BagItem[]>([]);
+  const [bagFiles, setBagFiles] = useState<LibraryFile[]>([]);
+  const [bagSkills, setBagSkills] = useState<BagSkill[]>([]);
   const [selected, setSelected] = useState<{ text: string; x: number; y: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState<boolean>(!!(initialChatId || initialQuestion));
@@ -78,6 +80,8 @@ export default function Chat() {
   const wsRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seenRef = useRef<Set<string>>(new Set());
+  const generatingRef = useRef(false);
+  const bootRef = useRef(false);
   const keyFor = (kind: BagItem["kind"], title: string, content: string) =>
     `${kind}:${title.trim().toLowerCase()}|${content.trim().toLowerCase()}`;
 
@@ -127,9 +131,32 @@ export default function Chat() {
   }, [search, state.chatId, state.answer, state.flashcards, initialQuestion]);
 
   useEffect(() => {
+    if (bootRef.current || !initialQuestion || initialChatId) return;
+    bootRef.current = true;
+    generatingRef.current = true;
+    setAwaitingAnswer(true);
+    const length = (search.get("length") as "short" | "medium" | "long" | null) || getResponseLength();
+    chatJSON({ q: initialQuestion, length })
+      .then((r) => {
+        if (!r?.chatId) return;
+        setChatId(r.chatId);
+        navigate(`/chat?chatId=${encodeURIComponent(r.chatId)}`, {
+          replace: true,
+          state: { chatId: r.chatId, q: initialQuestion },
+        });
+      })
+      .catch(() => {
+        generatingRef.current = false;
+        setAwaitingAnswer(false);
+        setConnecting(false);
+      });
+  }, [initialChatId, initialQuestion, navigate, search]);
+
+  useEffect(() => {
     if (!chatId) return;
     getChatDetail(chatId)
       .then((res) => {
+        if (generatingRef.current) return;
         if (res?.ok && Array.isArray(res.messages)) {
           const normalized = res.messages.map((m) =>
             m.role === "assistant" ? { ...m, content: normalizePayload((m as any).content).md } : m
@@ -159,14 +186,43 @@ export default function Chat() {
     ws.onmessage = (ev) => {
       try {
         const m = JSON.parse(ev.data);
+        if (m?.type === "delta" && typeof m.text === "string") {
+          setAwaitingAnswer(false);
+          setConnecting(false);
+          setMessages((prev) => {
+            const arr = [...(Array.isArray(prev) ? prev : [])];
+            const last = arr[arr.length - 1];
+            if (last?.role === "assistant") {
+              arr[arr.length - 1] = { ...last, content: `${last.content}${m.text}` };
+              return arr;
+            }
+            arr.push({ role: "assistant", content: m.text, at: Date.now() });
+            return arr;
+          });
+          return;
+        }
         if (m?.type === "answer") {
           const norm = normalizePayload(m.answer);
-          setMessages((prev) => ([...(Array.isArray(prev) ? prev : []), { role: "assistant", content: norm.md, at: Date.now() }]));
+          generatingRef.current = false;
+          setMessages((prev) => {
+            const arr = [...(Array.isArray(prev) ? prev : [])];
+            const last = arr[arr.length - 1];
+            if (last?.role === "assistant") {
+              arr[arr.length - 1] = { ...last, content: norm.md || last.content };
+              return arr;
+            }
+            if (norm.md) arr.push({ role: "assistant", content: norm.md, at: Date.now() });
+            return arr;
+          });
           if (norm.flashcards.length) setCards(norm.flashcards);
           if (norm.topic) setTopic(norm.topic);
           else if (norm.md) setTopic((t) => t || deriveTopicFromMarkdown(norm.md));
           setAwaitingAnswer(false);
           setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 0);
+        }
+        if (m?.type === "error") {
+          generatingRef.current = false;
+          setAwaitingAnswer(false);
         }
       } catch { }
     };
@@ -225,16 +281,24 @@ export default function Chat() {
     try {
       const res = await listFlashcards();
       const items = res.flashcards || [];
-      await Promise.all(items.map((c) => deleteFlashcard(c.id).catch(() => { })));
+      await Promise.all([
+        ...items.map((c) => deleteFlashcard(c.id).catch(() => { })),
+        clearLibraryFiles().catch(() => {}),
+      ]);
     } catch { }
     setBag([]);
+    setBagFiles([]);
     seenRef.current.clear();
   };
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await listFlashcards();
+        const [res, fileRes, skillList] = await Promise.all([
+          listFlashcards(),
+          listLibraryFiles(),
+          ensureDefaultSkills().catch(() => [] as BagSkill[]),
+        ]);
         const items = (res.flashcards || []).map<BagItem>((c) => ({
           id: c.id,
           kind: c.tag === "note" ? "note" : "flashcard",
@@ -242,6 +306,8 @@ export default function Chat() {
           content: c.answer,
         }));
         setBag(items.sort((a, b) => (a.id > b.id ? -1 : 1)));
+        setBagFiles(fileRes.files || []);
+        setBagSkills(skillList || []);
         const s = new Set<string>();
         for (const it of items) s.add(keyFor(it.kind, it.title, it.content));
         seenRef.current = s;
@@ -255,9 +321,13 @@ export default function Chat() {
     setMessages((prev) => ([...(Array.isArray(prev) ? prev : []), { role: "user", content: text, at: Date.now() }]));
     setAwaitingAnswer(true);
     setBusy(true);
+    generatingRef.current = true;
     try {
-      const r = await chatJSON({ q: text, chatId: chatId || undefined });
+      const r = await chatJSON({ q: text, chatId: chatId || undefined, length: getResponseLength() });
       if (r?.chatId && r.chatId !== chatId) setChatId(r.chatId);
+    } catch {
+      generatingRef.current = false;
+      setAwaitingAnswer(false);
     } finally {
       setBusy(false);
       setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 0);
@@ -361,8 +431,20 @@ export default function Chat() {
       />
 
       <Composer disabled={busy} onSend={sendFollowup} />
-      <BagFab count={bag.length} onClick={() => setBagOpen(true)} />
-      <BagDrawer open={bagOpen} items={bag} onClose={() => setBagOpen(false)} onClear={clearBag} />
+      <BagFab count={bag.length + bagFiles.length} onClick={() => setBagOpen(true)} />
+      <BagDrawer
+        open={bagOpen}
+        items={bag}
+        files={bagFiles}
+        skills={bagSkills}
+        onClose={() => setBagOpen(false)}
+        onClear={clearBag}
+        onOpenFile={(file) => {
+          setBagOpen(false);
+          if (file.chatId) navigate(`/chat?chatId=${encodeURIComponent(file.chatId)}`);
+        }}
+        onSkillChatStarted={(chatId) => navigate(`/chat?chatId=${encodeURIComponent(chatId)}`)}
+      />
     </div>
   );
 }

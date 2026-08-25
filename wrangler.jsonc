@@ -12,7 +12,7 @@
       "class_name": "PageLMContainer",
       "image": "./Dockerfile.pagelm",
       "instance_type": "standard-1",
-      "max_instances": 1
+      "max_instances": 2
     }
   ],
   "durable_objects": {
@@ -70,6 +70,8 @@
       "/chat*",
       "/quiz*",
       "/flashcards*",
+      "/files*",
+      "/skills*",
       "/podcast*",
       "/smartnotes*",
       "/exam*",

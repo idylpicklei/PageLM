@@ -10,12 +10,18 @@ import {
   isPromptRequest,
   rateLimitedResponse,
 } from "./rate-limit";
+import { handleCanvasRoutes } from "./canvas";
+import { handleFileLibraryRoutes } from "./files";
+import { handleSkillRoutes } from "./skills";
+import { makeReplayableRequest } from "./replay-request";
 
 export interface Env {
   PAGELM_BACKEND: DurableObjectNamespace<PageLMContainer>;
   DB: D1Database;
   ASSETS: Fetcher;
+  STORAGE: R2Bucket;
   CF_STORE_TOKEN: string;
+  CANVAS_TOKEN_KEY?: string;
   WORKER_PUBLIC_URL?: string;
   R2_BUCKET_NAME?: string;
   [key: string]: unknown;
@@ -29,6 +35,8 @@ const BACKEND_PREFIXES = [
   "/chats",
   "/quiz",
   "/flashcards",
+  "/files",
+  "/skills",
   "/podcast",
   "/smartnotes",
   "/exam",
@@ -45,7 +53,7 @@ const BACKEND_PREFIXES = [
   "/health",
 ];
 
-const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup"]);
+const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup", "/canvas"]);
 
 function isBackendRoute(pathname: string, method = "GET"): boolean {
   if (method === "GET" && SPA_GET_PATHS.has(pathname)) return false;
@@ -173,28 +181,92 @@ export class PageLMContainer extends Container {
 
   override async fetch(request: Request): Promise<Response> {
     this.envVars = buildContainerEnv(request, this.env);
+    const running = Boolean((this as { container?: { running?: boolean } }).container?.running);
+    if (!running) {
+      try {
+        await this.startAndWaitForPorts({
+          ports: [5000],
+          startOptions: { envVars: this.envVars, enableInternet: true },
+          cancellationOptions: {
+            instanceGetTimeoutMS: 60_000,
+            portReadyTimeoutMS: 90_000,
+          },
+        });
+      } catch (err) {
+        console.error("[container] start wait failed", err);
+      }
+    }
     return super.fetch(request);
   }
+}
+
+function isContainerWarmupError(text: string): boolean {
+  return /no Container instance available|currently provisioning|suddenly disconnected/i.test(text);
+}
+
+function containerWarmupResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "The app is still starting up. Please wait a few seconds and try again.",
+    }),
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": "8",
+      },
+    }
+  );
+}
+
+async function fetchContainer(container: { fetch(request: Request): Promise<Response> }, request: Request): Promise<Response> {
+  const replay = await makeReplayableRequest(request);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const last = await container.fetch(replay());
+      if (last.ok) return last;
+      const text = await last.clone().text().catch(() => "");
+      if (!isContainerWarmupError(text)) return last;
+    } catch (err) {
+      const text = String(err instanceof Error ? err.message : err);
+      if (!isContainerWarmupError(text) && !/used body/i.test(text)) throw err;
+    }
+    if (attempt < 4) await scheduler.wait(2000 * (attempt + 1));
+  }
+  return containerWarmupResponse();
 }
 
 async function proxyToBackend(request: Request, env: Env, pathname: string): Promise<Response> {
   const container = getContainer(env.PAGELM_BACKEND, "pagelm");
   if (pathname === "/health") {
-    return container.fetch(request);
+    return fetchContainer(container, request);
   }
 
   const user = await getSessionUser(request, env.DB);
   if (!user) return unauthorized();
 
+  if (request.method === "POST" && pathname === "/transcriber") {
+    const contentType = request.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "YouTube transcription is temporarily unavailable. Upload an audio or video file instead.",
+        }),
+        { status: 503, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
   const forwarded = injectUserHeaders(request, user);
   if (!isPromptRequest(request.method, pathname)) {
-    return container.fetch(forwarded);
+    return fetchContainer(container, forwarded);
   }
 
   const quota = await consumePromptQuota(env.DB, user.id, env);
   if (!quota.allowed) return rateLimitedResponse(quota);
 
-  const response = await container.fetch(forwarded);
+  const response = await fetchContainer(container, forwarded);
   if (!quota.warning) return response;
 
   const headers = new Headers(response.headers);
@@ -222,6 +294,54 @@ export default {
       } catch (err) {
         console.error("[auth]", err);
         return new Response(JSON.stringify({ error: "auth_failed" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.pathname === "/canva") {
+      return Response.redirect(new URL("/canvas", request.url), 302);
+    }
+
+    if (url.pathname === "/files" || url.pathname.startsWith("/files/") || url.pathname.startsWith("/api/files")) {
+      try {
+        const filesResponse = await handleFileLibraryRoutes(request, env, url.pathname);
+        if (filesResponse) return filesResponse;
+      } catch (err) {
+        console.error("[files]", err);
+        return new Response(JSON.stringify({ error: "Could not load files from storage." }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    if (url.pathname === "/skills" || url.pathname.startsWith("/skills/")) {
+      try {
+        const skillsResponse = await handleSkillRoutes(request, env, url.pathname);
+        if (skillsResponse) return skillsResponse;
+      } catch (err) {
+        console.error("[skills]", err);
+        return new Response(JSON.stringify({ error: "Could not load skills." }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    if (url.pathname.startsWith("/api/canvas")) {
+      try {
+        const canvasResponse = await handleCanvasRoutes(request, env, url.pathname);
+        if (canvasResponse) return canvasResponse;
+      } catch (err) {
+        console.error("[canvas]", err);
+        const msg = err instanceof Error ? err.message : "canvas_failed";
+        return new Response(JSON.stringify({ error: msg, canvasError: true }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
         });

@@ -6,7 +6,8 @@ export type ChatMessage = { role: "user" | "assistant"; content: string; at: num
 export type ChatInfo = { id: string; title?: string; createdAt?: number };
 export type ChatsList = { ok: true; chats: ChatInfo[] };
 export type ChatDetail = { ok: true; chat: ChatInfo; messages: ChatMessage[] };
-export type ChatJSONBody = { q: string; chatId?: string };
+export type ResponseLength = "short" | "medium" | "long";
+export type ChatJSONBody = { q: string; chatId?: string; length?: ResponseLength };
 export type ChatPhase = "upload_start" | "upload_done" | "generating";
 export type FlashCard = { q: string; a: string; tags?: string[] };
 export type Question = { id: number; question: string; options: string[]; correct: number; hint: string; explanation: string; imageHtml?: string; };
@@ -21,6 +22,21 @@ export type SavedFlashcard = {
   question: string;
   answer: string;
   tag: string;
+  created: number;
+};
+export type LibraryFile = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  chatId: string;
+  source: "canvas" | "upload";
+  created: number;
+};
+export type BagSkill = {
+  id: string;
+  name: string;
+  prompt: string;
   created: number;
 };
 export type ExamEvent =
@@ -83,6 +99,7 @@ export type ChatEvent =
   | { type: "ready"; chatId: string }
   | { type: "phase"; value: ChatPhase }
   | { type: "file"; filename: string; mime: string }
+  | { type: "delta"; text: string }
   | { type: "answer"; answer: AnswerPayload }
   | { type: "done" }
   | { type: "error"; error: string };
@@ -152,11 +169,19 @@ async function req<T = unknown>(
   try {
     const r = await fetch(url, { signal, credentials: "include", ...rest });
     if (r.status === 401 && !skipAuthRedirect) {
-      const path = window.location.pathname;
-      if (!path.startsWith("/login") && !path.startsWith("/signup")) {
-        window.location.href = "/login";
+      const txt = await r.text().catch(() => "");
+      const parsed = parseErrorBody(txt);
+      const sessionExpired =
+        parsed.message === "unauthorized" ||
+        txt.includes('"error":"unauthorized"');
+      if (sessionExpired) {
+        const path = window.location.pathname;
+        if (!path.startsWith("/login") && !path.startsWith("/signup")) {
+          window.location.href = "/login";
+        }
+        throw new ApiError("unauthorized", 401);
       }
-      throw new ApiError("unauthorized", 401);
+      throw new ApiError(parsed.message || r.statusText || "Request failed", 401);
     }
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
@@ -231,17 +256,105 @@ export async function authLogout() {
   });
 }
 
+export type CanvasCourse = {
+  id: number;
+  name: string;
+  code: string | null;
+};
+
+export type CanvasFile = {
+  id: number;
+  name: string;
+  contentType: string;
+  size: number;
+  updatedAt: string | null;
+  importable: boolean;
+};
+
+export type CanvasStatusResponse = {
+  ok: true;
+  connected: boolean;
+  last4: string | null;
+  host: string | null;
+};
+
+export async function canvasStatus() {
+  return req<CanvasStatusResponse>(`${env.backend}/api/canvas/status`, { method: "GET", skipAuthRedirect: true });
+}
+
+export async function canvasSaveToken(host: string, token: string) {
+  return req<{ ok: true; connected: boolean; last4: string; host: string }>(`${env.backend}/api/canvas/token`, {
+    method: "PUT",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ host, token }),
+    skipAuthRedirect: true,
+  });
+}
+
+export async function canvasDisconnect() {
+  return req<{ ok: true; connected: boolean }>(`${env.backend}/api/canvas/token`, {
+    method: "DELETE",
+    skipAuthRedirect: true,
+  });
+}
+
+export async function canvasListCourses() {
+  return req<{ ok: true; items: CanvasCourse[] }>(`${env.backend}/api/canvas/courses`, {
+    method: "GET",
+    skipAuthRedirect: true,
+  });
+}
+
+export async function canvasListFiles(courseId: number | string) {
+  return req<{ ok: true; items: CanvasFile[] }>(`${env.backend}/api/canvas/courses/${encodeURIComponent(String(courseId))}/files`, {
+    method: "GET",
+    skipAuthRedirect: true,
+  });
+}
+
+export async function canvasImportFiles(body: {
+  courseId: number | string;
+  fileIds: Array<number | string>;
+  chatId?: string;
+  title?: string;
+}) {
+  return req<{ ok: true; chatId?: string; imported: number; warning?: string }>(`${env.backend}/api/canvas/import`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify(body),
+    skipAuthRedirect: true,
+    timeout: Math.max(env.timeout, 300000),
+  });
+}
+
+const LENGTH_KEY = "pagelm.responseLength";
+
+export function getResponseLength(): ResponseLength {
+  try {
+    const value = sessionStorage.getItem(LENGTH_KEY);
+    if (value === "short" || value === "medium" || value === "long") return value;
+  } catch {}
+  return "medium";
+}
+
+export function setResponseLength(value: ResponseLength) {
+  try {
+    sessionStorage.setItem(LENGTH_KEY, value);
+  } catch {}
+}
+
 export async function chatJSON(body: ChatJSONBody) {
   return req<ChatStartResponse>(`${env.backend}/chat`, {
     method: "POST",
     headers: jsonHeaders({}),
-    body: JSON.stringify(body),
+    body: JSON.stringify({ length: getResponseLength(), ...body }),
   });
 }
 
 export async function chatMultipart(q: string, files: File[], chatId?: string) {
   const f = new FormData();
   f.append("q", q);
+  f.append("length", getResponseLength());
   if (chatId) f.append("chatId", chatId);
   for (const file of files) f.append("file", file, file.name);
   return req<ChatStartResponse>(`${env.backend}/chat`, {
@@ -355,6 +468,100 @@ export async function deleteFlashcard(id: string) {
   return req<{ ok: true }>(`${env.backend}/flashcards/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export async function listLibraryFiles() {
+  return req<{ ok: true; files: LibraryFile[] }>(`${env.backend}/api/files`, {
+    method: "GET",
+  });
+}
+
+export async function deleteLibraryFile(id: string) {
+  return req<{ ok: true }>(`${env.backend}/api/files/object?key=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function clearLibraryFiles() {
+  return req<{ ok: true }>(`${env.backend}/api/files`, {
+    method: "DELETE",
+  });
+}
+
+export function libraryFileDownloadUrl(id: string): string {
+  return `${env.backend}/api/files/object?key=${encodeURIComponent(id)}`;
+}
+
+const DEFAULT_BAG_SKILLS: Array<{ name: string; prompt: string }> = [
+  {
+    name: "Make flashcards",
+    prompt:
+      "Using the attached file, create 12 numbered flashcards. For each card, give a clear question and a concise answer. Format as Q/A pairs I can study from.",
+  },
+  {
+    name: "Quiz me",
+    prompt:
+      "Using the attached file, write a short multiple-choice quiz with 8 questions. Include 4 options per question, mark the correct answer, and add a one-sentence explanation for each.",
+  },
+  {
+    name: "Summarize",
+    prompt:
+      "Using the attached file, write a study-guide summary with key concepts, definitions, and a short list of things to review before an exam.",
+  },
+];
+
+export async function listSkills() {
+  return req<{ ok: true; skills: BagSkill[] }>(`${env.backend}/skills`, {
+    method: "GET",
+  });
+}
+
+export async function createSkill(input: { name: string; prompt: string }) {
+  return req<{ ok: true; skill: BagSkill }>(`${env.backend}/skills`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateSkill(id: string, input: { name: string; prompt: string }) {
+  return req<{ ok: true; skill: BagSkill }>(`${env.backend}/skills/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: jsonHeaders({}),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSkill(id: string) {
+  return req<{ ok: true }>(`${env.backend}/skills/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function ensureDefaultSkills(): Promise<BagSkill[]> {
+  const res = await listSkills();
+  if (res.skills?.length) return res.skills;
+  const created: BagSkill[] = [];
+  for (const starter of DEFAULT_BAG_SKILLS) {
+    const out = await createSkill(starter);
+    created.push(out.skill);
+  }
+  return created;
+}
+
+export async function libraryFileToUpload(item: LibraryFile): Promise<File> {
+  const res = await fetch(libraryFileDownloadUrl(item.id), { credentials: "include" });
+  if (!res.ok) throw new Error("Could not load that file from your bag.");
+  const blob = await res.blob();
+  return new File([blob], item.filename, {
+    type: item.mimeType || blob.type || "application/octet-stream",
+  });
+}
+
+export async function runSkillWithFile(skill: BagSkill, file: LibraryFile): Promise<string> {
+  const upload = await libraryFileToUpload(file);
+  const { chatId } = await chatMultipart(skill.prompt, [upload]);
+  return chatId;
 }
 
 export async function getExams() {

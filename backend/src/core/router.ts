@@ -8,6 +8,8 @@ import { transcriberRoutes } from "./routes/transcriber";
 import { plannerRoutes } from "./routes/planner";
 import { debateRoutes } from "./routes/debate";
 import { companionRoutes } from "./routes/companion";
+import { fileRoutes } from "./routes/files";
+import { skillRoutes } from "./routes/skills";
 
 export function registerRoutes(app: any) {
   chatRoutes(app);
@@ -15,6 +17,8 @@ export function registerRoutes(app: any) {
   examRoutes(app);
   podcastRoutes(app);
   flashcardRoutes(app);
+  fileRoutes(app);
+  skillRoutes(app);
   smartnotesRoutes(app);
   transcriberRoutes(app);
   plannerRoutes(app);
