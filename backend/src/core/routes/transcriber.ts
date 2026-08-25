@@ -1,4 +1,4 @@
-import { transcribeAudio, transcribeYouTube, TranscriptionProvider, TranscriptionResult } from "../../services/transcriber";
+import { transcribeAudio, TranscriptionProvider, TranscriptionResult } from "../../services/transcriber";
 import { config } from "../../config/env";
 import fs from "fs";
 import os from "os";
@@ -135,21 +135,16 @@ export function transcriberRoutes(app: any) {
             const contentType = req.headers["content-type"] || "";
 
             if (contentType.includes("application/json")) {
-                const youtubeUrl = String(req.body?.youtubeUrl || req.body?.url || "").trim();
-                if (!youtubeUrl) {
-                    return res.status(400).json({ ok: false, error: "youtubeUrl required" });
-                }
-                const { jobId } = startJob(async (setPhase) => {
-                    setPhase("Watching YouTube video…");
-                    return transcribeYouTube(youtubeUrl);
+                return res.status(503).json({
+                    ok: false,
+                    error: "YouTube transcription is temporarily unavailable. Upload an audio or video file instead.",
                 });
-                return res.status(202).json({ ok: true, jobId });
             }
 
             if (!contentType.includes("multipart/form-data")) {
                 return res.status(400).json({
                     ok: false,
-                    error: "Send an audio file or a YouTube URL",
+                    error: "Send an audio or video file",
                 });
             }
 

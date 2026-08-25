@@ -113,7 +113,7 @@ function server() {
     const add = (a, b, c) => { ROUTES.push({ method: a.toUpperCase(), path: b, handler: c }); };
     const use = (a) => { WARES.push(a); };
     const listen = (a, b, c) => {
-        SERVER.setTimeout(10000);
+        SERVER.setTimeout(300000);
         if (typeof b === 'function') {
             SERVER.listen(a, b);
         } else {

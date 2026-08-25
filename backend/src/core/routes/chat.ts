@@ -1,5 +1,6 @@
-import { handleAsk } from "../../lib/ai/ask";
-import { parseMultipart, handleUpload } from "../../lib/parser/upload";
+import fs from "fs";
+import { handleChatAsk, type ResponseLength } from "../../lib/ai/ask";
+import { parseMultipart, parseImportMultipart, handleUpload } from "../../lib/parser/upload";
 import {
   mkChat,
   getChat,
@@ -8,10 +9,52 @@ import {
   getMsgs,
 } from "../../utils/chat/chat";
 import { emitToAll } from "../../utils/chat/ws";
+import { addLibraryFiles, type LibraryFile } from "../../utils/library/files";
 
 type UpFile = { path: string; filename: string; mimeType: string };
+type LiveChat = { events: any[]; finalAnswer?: any };
 
 const chatSockets = new Map<string, Set<any>>();
+const chatLive = new Map<string, LiveChat>();
+
+function fileSize(filePath: string): number {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function importSource(title?: string): LibraryFile["source"] {
+  return String(title || "").toLowerCase().startsWith("canvas") ? "canvas" : "upload";
+}
+
+function parseLength(value: unknown): ResponseLength | undefined {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "short" || raw === "medium" || raw === "long") return raw;
+  return undefined;
+}
+
+function emitChat(id: string, payload: any) {
+  let live = chatLive.get(id);
+  if (!live) {
+    live = { events: [] };
+    chatLive.set(id, live);
+  }
+  if (payload?.type === "answer") {
+    live.finalAnswer = payload;
+    live.events = [];
+  } else if (!live.finalAnswer) {
+    if (payload?.type === "delta" && typeof payload.text === "string") {
+      const last = live.events[live.events.length - 1];
+      if (last?.type === "delta") last.text += payload.text;
+      else live.events.push({ type: "delta", text: payload.text });
+    } else {
+      live.events.push(payload);
+    }
+  }
+  emitToAll(chatSockets.get(id), payload);
+}
 
 export function chatRoutes(app: any) {
   app.ws("/ws/chat", (ws: any, req: any) => {
@@ -34,6 +77,80 @@ export function chatRoutes(app: any) {
     });
 
     ws.send(JSON.stringify({ type: "ready", chatId }));
+    const live = chatLive.get(chatId);
+    if (live?.finalAnswer) {
+      ws.send(JSON.stringify(live.finalAnswer));
+    } else if (live?.events?.length) {
+      for (const ev of live.events) ws.send(JSON.stringify(ev));
+    }
+  });
+
+  app.post("/chat/import", async (req: any, res: any, next: any) => {
+    try {
+      const ct = String(req.headers["content-type"] || "");
+      if (!ct.includes("multipart/form-data")) {
+        return res.status(400).send({ error: "multipart/form-data required" });
+      }
+
+      const { chatId: existingChatId, title, files } = await parseImportMultipart(req);
+      if (!files.length) return res.status(400).send({ error: "at least one file required" });
+
+      let chat = existingChatId ? await getChat(existingChatId) : undefined;
+      if (!chat) chat = await mkChat(title || files[0]?.filename || "Canvas import");
+      const id = chat.id;
+      const ns = `chat:${id}`;
+
+      const imported: Array<Omit<LibraryFile, "id" | "created">> = [];
+      for (const f of files) {
+        imported.push({
+          filename: f.filename,
+          mimeType: f.mimeType,
+          size: fileSize(f.path),
+          chatId: id,
+          source: importSource(title),
+        });
+      }
+      const saved = await addLibraryFiles(imported);
+
+      for (const f of files) {
+        try {
+          await handleUpload({
+            filePath: f.path,
+            filename: f.filename,
+            contentType: f.mimeType,
+            namespace: ns,
+          });
+        } catch (err: any) {
+          console.error("[chat/import] process", f.filename, err?.message || err);
+        }
+      }
+      const names = saved.map((f) => `- ${f.filename}`).join("\n");
+      await addMsg(id, {
+        role: "user",
+        content: `Imported ${saved.length} file${saved.length === 1 ? "" : "s"}:\n${names}`,
+        at: Date.now(),
+      });
+      await addMsg(id, {
+        role: "assistant",
+        content:
+          saved.length === 1
+            ? `I've added **${saved[0].filename}** to this chat and your learning bag. Ask me anything about it.`
+            : `I've added **${saved.length} files** to this chat and your learning bag. Ask me anything about them.`,
+        at: Date.now(),
+      });
+
+      res.send({ ok: true, chatId: id, imported: saved.length, files: saved });
+    } catch (e: any) {
+      console.error("[chat/import]", e?.message || e);
+      const msg = String(e?.message || "import failed");
+      if (/unsupported file type/i.test(msg)) {
+        return res.status(400).send({ error: msg });
+      }
+      if (/no valid content/i.test(msg)) {
+        return res.status(400).send({ error: "Could not extract text from this file. Try a different PDF or document." });
+      }
+      res.status(500).send({ error: msg });
+    }
   });
 
   app.post("/chat", async (req: any, res: any, next: any) => {
@@ -45,18 +162,21 @@ export function chatRoutes(app: any) {
       let q = "";
       let chatId: string | undefined;
       let files: UpFile[] = [];
+      let length: ResponseLength | undefined;
 
       if (isMp) {
         const tMp = Date.now();
-        const { q: mq, chatId: mcid, files: mf } = await parseMultipart(req);
+        const { q: mq, chatId: mcid, files: mf, length: ml } = await parseMultipart(req);
         q = mq;
         chatId = mcid;
         files = mf || [];
+        length = parseLength(ml);
         if (!q)
           return res.status(400).send({ error: "q required for file uploads" });
       } else {
         q = req.body?.q || "";
         chatId = req.body?.chatId;
+        length = parseLength(req.body?.length);
         if (!q) return res.status(400).send({ error: "q required" });
       }
 
@@ -71,13 +191,13 @@ export function chatRoutes(app: any) {
       (async () => {
         try {
           if (isMp) {
-            emitToAll(chatSockets.get(id), {
+            emitChat(id, {
               type: "phase",
               value: "upload_start",
             });
-            const tUp = Date.now();
+            const uploaded: Array<Omit<LibraryFile, "id" | "created">> = [];
             for (const f of files) {
-              emitToAll(chatSockets.get(id), {
+              emitChat(id, {
                 type: "file",
                 filename: f.filename,
                 mime: f.mimeType,
@@ -88,29 +208,35 @@ export function chatRoutes(app: any) {
                 contentType: f.mimeType,
                 namespace: ns,
               });
+              uploaded.push({
+                filename: f.filename,
+                mimeType: f.mimeType,
+                size: fileSize(f.path),
+                chatId: id,
+                source: "upload" as const,
+              });
             }
-            emitToAll(chatSockets.get(id), {
+            if (uploaded.length) await addLibraryFiles(uploaded);
+            emitChat(id, {
               type: "phase",
               value: "upload_done",
             });
           }
 
-          const tUser = Date.now();
-          await addMsg(id, { role: "user", content: q, at: Date.now() });
-          emitToAll(chatSockets.get(id), {
+          const msgHistory = await getMsgs(id);
+          const relevantHistory = msgHistory.slice(-20);
+          void addMsg(id, { role: "user", content: q, at: Date.now() });
+          emitChat(id, {
             type: "phase",
             value: "generating",
           });
 
-          let answer: any = "";
-
-          const msgHistory = await getMsgs(id);
-          const relevantHistory = msgHistory.slice(-20);
-
-          answer = await handleAsk({
-            q,
+          const answer = await handleChatAsk({
+            question: q,
             namespace: ns,
             history: relevantHistory,
+            length,
+            onDelta: (text) => emitChat(id, { type: "delta", text }),
           });
 
           await addMsg(id, {
@@ -118,8 +244,8 @@ export function chatRoutes(app: any) {
             content: answer,
             at: Date.now(),
           });
-          emitToAll(chatSockets.get(id), { type: "answer", answer });
-          emitToAll(chatSockets.get(id), { type: "done" });
+          emitChat(id, { type: "answer", answer });
+          emitChat(id, { type: "done" });
         } catch (err: any) {
           const msg = err?.message || "failed";
           const stack = err?.stack || String(err);

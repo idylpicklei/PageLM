@@ -1,10 +1,9 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { chatJSON } from "../../lib/api";
+import { getResponseLength } from "../../lib/api";
 
 export default function ExploreTopics() {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
 
   const moreRows = useMemo(
@@ -20,29 +19,21 @@ export default function ExploreTopics() {
   const promptFor = (topic: string) =>
     `Give me a clear, beginner-friendly lesson on ${topic}`;
 
-  const startTopic = async (title: string) => {
-    if (busy) return;
-    try {
-      setBusy(true);
-      const q = promptFor(title);
-      const r = await chatJSON({ q });
-      navigate(`/chat?chatId=${encodeURIComponent(r.chatId)}&q=${encodeURIComponent(q)}`, {
-        state: { chatId: r.chatId, q },
-      });
-    } finally {
-      setBusy(false);
-    }
+  const startTopic = (title: string) => {
+    const q = promptFor(title);
+    navigate(`/chat?q=${encodeURIComponent(q)}&length=${encodeURIComponent(getResponseLength())}`, {
+      state: { q },
+    });
   };
 
   const Card = ({ title, extra }: { title: string; extra?: string }) => (
     <button
       type="button"
       onClick={() => startTopic(title)}
-      disabled={busy}
       className={`w-full h-48 relative rounded-3xl border border-stone-900 bg-stone-950 
                   hover:scale-105 transition-transform duration-200 ease-out 
-                  focus:outline-none focus:ring-2 focus:ring-stone-700 disabled:opacity-60 ${extra || ""}`}
-      title={busy ? "Starting…" : `Learn ${title}`}
+                  focus:outline-none focus:ring-2 focus:ring-stone-700 ${extra || ""}`}
+      title={`Learn ${title}`}
     >
       <img src={imgSrc(title)} alt={title} className="w-full h-full rounded-3xl object-cover" draggable={false} />
       <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-transparent to-black" />
@@ -69,7 +60,7 @@ export default function ExploreTopics() {
             clipRule="evenodd"
           />
         </svg>
-        <span className="text-sm">{busy ? "Starting…" : "EXPLORE TOPICS"}</span>
+        <span className="text-sm">EXPLORE TOPICS</span>
       </div>
 
       <div className="w-full max-w-4xl mx-auto overflow-hidden">

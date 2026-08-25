@@ -2,7 +2,10 @@ import crypto from "crypto"
 import { readStorageSync, writeStorageSync } from "../../utils/storage/store"
 import llm from "../../utils/llm/llm"
 import { execDirect } from "../../agents/runtime"
+import { hasLocalDocuments } from "../../utils/database/db"
 import { normalizeTopic } from "../../utils/text/normalize"
+
+export type ResponseLength = "short" | "medium" | "long"
 
 export type AskCard = { q: string; a: string; tags?: string[] }
 export type AskPayload = { topic: string; answer: string; flashcards: AskCard[] }
@@ -225,6 +228,15 @@ Apply all principles above to create content that demonstrates:
 [[RESTRICTIONS "END"]]
 `.trim()
 
+export const CHAT_SYSTEM_PROMPT = `
+You are PageLM, a clear and friendly tutor.
+Write GitHub-flavored markdown only. No JSON. No preamble. No flashcards.
+Match the answer to the question:
+- Simple, factual, or conversational questions: a few sentences.
+- "Teach me", "explain", or how/why questions: a short structured lesson with headings.
+Do not pad, repeat yourself, or add sections the user did not ask for.
+`.trim()
+
 const keyOf = (x: any) => crypto.createHash("sha256").update(typeof x === "string" ? x : JSON.stringify(x)).digest("hex")
 const cacheRel = (k: any) => `cache/ask/${keyOf(k)}.json`
 const readCache = (k: any) => {
@@ -266,6 +278,70 @@ function toConversationHistory(history?: HistoryMessage[]): Array<{ role: string
     out.push({ role: msg.role, content: toMessageContent(msg.content) })
   }
   return out
+}
+
+function lengthInstruction(length?: ResponseLength): string {
+  if (length === "short") return "Keep this under 120 words."
+  if (length === "long") return "Write a thorough lesson (about 500-800 words) with examples."
+  return "Default to a concise answer. Go longer only if the user asked to learn or explain in depth."
+}
+
+function ragDocs(rag: unknown): Array<{ text?: string }> {
+  if (Array.isArray(rag)) return rag
+  const result = (rag as { result?: unknown } | null)?.result
+  return Array.isArray(result) ? result : []
+}
+
+async function retrieveContext(ns: string, question: string, k: number): Promise<string> {
+  if (!hasLocalDocuments(ns)) return "NO_CONTEXT"
+  try {
+    const rag = await execDirect({
+      agent: "researcher",
+      plan: { steps: [{ tool: "rag.search", input: { q: question, ns, k }, timeoutMs: 4000, retries: 0 }] },
+      ctx: { ns },
+    })
+    const ctx = ragDocs(rag).map((d) => d?.text || "").filter(Boolean).join("\n\n")
+    return ctx || "NO_CONTEXT"
+  } catch (err) {
+    console.warn("[ask] rag skipped", err)
+    return "NO_CONTEXT"
+  }
+}
+
+async function streamModel(messages: any[], onDelta?: (text: string) => void): Promise<string> {
+  if (typeof llm.stream === "function") {
+    let out = ""
+    for await (const chunk of llm.stream(messages as any)) {
+      const text = toText(chunk)
+      if (!text) continue
+      out += text
+      onDelta?.(text)
+    }
+    return out.trim()
+  }
+  const res = await llm.call(messages as any)
+  const draft = toText(res).trim()
+  if (draft) onDelta?.(draft)
+  return draft
+}
+
+async function makeFlashcards(question: string, answer: string, length?: ResponseLength): Promise<AskCard[]> {
+  if (length === "short" || answer.length < 120) return []
+  const count = length === "long" ? 6 : 4
+  try {
+    const res = await llm.call([
+      {
+        role: "system",
+        content: `Return ONLY JSON: {"flashcards":[{"q":"","a":"","tags":["deep"]}]}. Create ${count} reasoning flashcards from the lesson. JSON only.`,
+      },
+      { role: "user", content: `Question:\n${question}\n\nLesson:\n${answer.slice(0, 4000)}` },
+    ] as any)
+    const parsed = tryParse<any>(extractFirstJsonObject(toText(res).trim()) || "")
+    return Array.isArray(parsed?.flashcards) ? parsed.flashcards : []
+  } catch (err) {
+    console.warn("[ask] flashcards skipped", err)
+    return []
+  }
 }
 
 type AskWithContextOptions = {
@@ -332,15 +408,7 @@ export async function handleAsk(
   const questionRaw = typeof q === "string" ? q : String(q ?? "")
   const safeQ = normalizeTopic(questionRaw)
   const nsFinal = typeof ns === "string" && ns.trim() ? ns : "pagelm"
-
-  const rag = await execDirect({
-    agent: "researcher",
-    plan: { steps: [{ tool: "rag.search", input: { q: safeQ, ns: nsFinal, k }, timeoutMs: 8000, retries: 1 }] },
-    ctx: { ns: nsFinal }
-  })
-
-  const ctxDocs = Array.isArray(rag) ? (rag as Array<{ text?: string }>) : []
-  const ctx = ctxDocs.map(d => d?.text || "").join("\n\n") || "NO_CONTEXT"
+  const ctx = await retrieveContext(nsFinal, safeQ, k)
   const topic = guessTopic(safeQ) || "General"
 
   return askWithContext({
@@ -351,4 +419,29 @@ export async function handleAsk(
     systemPrompt: BASE_SYSTEM_PROMPT,
     cacheScope: `ans:${nsFinal}`
   })
+}
+
+export async function handleChatAsk(opts: {
+  question: string
+  namespace?: string
+  history?: HistoryMessage[]
+  length?: ResponseLength
+  onDelta?: (text: string) => void
+}): Promise<AskPayload> {
+  const questionRaw = typeof opts.question === "string" ? opts.question : String(opts.question ?? "")
+  const safeQ = normalizeTopic(questionRaw)
+  const nsFinal = typeof opts.namespace === "string" && opts.namespace.trim() ? opts.namespace : "pagelm"
+  const ctx = await retrieveContext(nsFinal, safeQ, 6)
+  const topic = guessTopic(safeQ) || "General"
+
+  const messages: any[] = [{ role: "system", content: CHAT_SYSTEM_PROMPT }]
+  for (const msg of toConversationHistory(opts.history)) messages.push(msg)
+  messages.push({
+    role: "user",
+    content: `Context:\n${ctx}\n\nQuestion:\n${safeQ}\n\n${lengthInstruction(opts.length)}\nWrite the answer now.`,
+  })
+
+  const answer = await streamModel(messages, opts.onDelta)
+  const flashcards = await makeFlashcards(safeQ, answer, opts.length)
+  return { topic, answer, flashcards }
 }

@@ -2,7 +2,7 @@ import { Chroma } from "@langchain/community/vectorstores/chroma"
 import { Document } from "@langchain/core/documents"
 import { EmbeddingsInterface } from "@langchain/core/embeddings"
 import { config } from "../../config/env"
-import { readStorage, writeStorage } from "../storage/store"
+import { existsStorageSync, readStorage, writeStorage } from "../storage/store"
 
 const memoryStores: Record<string, any> = {}
 const retrieverCache: Record<string, any> = {}
@@ -38,6 +38,10 @@ export async function saveDocuments(
   }
 }
 
+export function hasLocalDocuments(collection: string): boolean {
+  return existsStorageSync(`json/${collection}.json`)
+}
+
 export async function getRetriever(
   collection: string,
   embeddings: EmbeddingsInterface
@@ -46,6 +50,11 @@ export async function getRetriever(
 
   if (config.db_mode === "json") {
     const rel = `json/${collection}.json`
+    if (!existsStorageSync(rel)) {
+      const empty = { invoke: async () => [] }
+      retrieverCache[collection] = empty
+      return empty
+    }
     let docsRaw: any[] = []
     try {
       docsRaw = JSON.parse((await readStorage(rel, "utf-8")) as string)
@@ -56,6 +65,11 @@ export async function getRetriever(
       pageContent: typeof d.pageContent === "string" ? d.pageContent : String(d.pageContent ?? ""),
       metadata: d.metadata || {},
     }))
+    if (!docs.length) {
+      const empty = { invoke: async () => [] }
+      retrieverCache[collection] = empty
+      return empty
+    }
     if (!memoryStores[collection]) {
       const { MemoryVectorStore } = await import("@langchain/classic/vectorstores/memory")
       memoryStores[collection] = await MemoryVectorStore.fromDocuments(docs, embeddings)

@@ -83,7 +83,7 @@ export default function PromptBox({
 
         <button
           onClick={onSend}
-          disabled={busy || !value.trim()}
+          disabled={busy || (!value.trim() && !stagedFileName)}
           className="rounded-full bg-stone-900 hover:bg-stone-800 duration-300 transition-all hover:text-white p-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Send"
           title={busy ? "Please wait..." : "Send"}

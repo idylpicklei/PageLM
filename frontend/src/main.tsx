@@ -10,6 +10,7 @@ import ExamLabs from "./pages/examlab.tsx";
 import NotFound from './pages/404.tsx'
 import PlannerPage from './pages/Planner'
 import Debate from './pages/Debate'
+import CanvasPage from './pages/Canvas'
 import Login from "./pages/Login";
 import { AuthProvider } from "./components/AuthProvider";
 import RequireAuth from "./components/RequireAuth";
@@ -37,6 +38,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="debate" element={<Debate />} />
           <Route path="cards" element={<FlashCards />} />
           <Route path="exam" element={<ExamLabs />} />
+          <Route path="canvas" element={<CanvasPage />} />
+          <Route path="canva" element={<Navigate to="/canvas" replace />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

@@ -1,6 +1,6 @@
 import fs from "fs"
 import path from "path"
-import { askWithContext, BASE_SYSTEM_PROMPT } from "../../lib/ai/ask"
+import { askWithContext } from "../../lib/ai/ask"
 
 const allowedRoots = [
   path.resolve(process.cwd(), "storage"),
@@ -62,13 +62,11 @@ async function readDocumentText(filePath: string): Promise<string> {
 
 function buildCompanionPrompt(label?: string): string {
   const focus = label ? ` for the document "${label}"` : " for this document"
-  const extra = `
-CONTEXT FOCUS
-You are an AI companion${focus}. Use ONLY the supplied context to respond.
-If the context is insufficient, say so clearly rather than guessing.
-Favor concise, actionable study guidance grounded in the provided material.
-`
-  return `${BASE_SYSTEM_PROMPT}\n\n${extra.trim()}`
+  return `You are PageLM, an AI companion${focus}.
+Use ONLY the supplied context. If it is insufficient, say so instead of guessing.
+Return ONLY JSON:
+{"topic":"...","answer":"GitHub-flavored markdown","flashcards":[{"q":"...","a":"...","tags":["deep"]}]}
+Keep answers concise and actionable. At most 3 flashcards. No text outside JSON.`
 }
 
 export function companionRoutes(app: any) {

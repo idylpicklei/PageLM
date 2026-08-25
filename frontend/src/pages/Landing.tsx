@@ -4,7 +4,8 @@ import { useNavigate } from "react-router-dom";
 import PromptRail from "../components/Landing/PromptRail";
 import PromptBox from "../components/Landing/PromptBox";
 import ExploreTopics from "../components/Landing/ExploreTopics";
-import { chatMultipart, chatJSON, isSlowDownError } from "../lib/api";
+import BagFilePicker from "../components/Landing/BagFilePicker";
+import { chatMultipart, isSlowDownError, setResponseLength as persistResponseLength } from "../lib/api";
 
 export default function Landing() {
   const [prompt, setPrompt] = useState("");
@@ -14,11 +15,12 @@ export default function Landing() {
   const [showLength, setShowLength] = useState(false);
   const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
-  const onPickFile = () => fileRef.current?.click();
+  const onPickFile = () => setFilePickerOpen(true);
   const onRemoveFile = () => setStagedFile(null);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -42,22 +44,25 @@ export default function Landing() {
       return;
     }
 
-    setBusy(true);
-    try {
-      if (stagedFile) {
+    const length = responseLength.toLowerCase() as "short" | "medium" | "long";
+    persistResponseLength(length);
+
+    if (stagedFile) {
+      setBusy(true);
+      try {
         const { chatId } = await chatMultipart(q || " ", [stagedFile]);
         navigate(`/chat?chatId=${encodeURIComponent(chatId)}&q=${encodeURIComponent(q)}`);
-        return;
+      } catch (err) {
+        if (!isSlowDownError(err)) {
+          adaptiveToast.error("Failed to start chat", "There was a problem reaching the AI. Please try sending your prompt again.");
+        }
+      } finally {
+        setBusy(false);
       }
-      const r = await chatJSON({ q });
-      navigate(`/chat?chatId=${encodeURIComponent(r.chatId)}&q=${encodeURIComponent(q)}`);
-    } catch (err) {
-      if (!isSlowDownError(err)) {
-        adaptiveToast.error("Failed to start chat", "There was a problem reaching the AI. Please try sending your prompt again.");
-      }
-    } finally {
-      setBusy(false);
+      return;
     }
+
+    navigate(`/chat?q=${encodeURIComponent(q)}&length=${encodeURIComponent(length)}`);
   };
 
   return (
@@ -199,6 +204,12 @@ export default function Landing() {
       <ExploreTopics />
 
       <input ref={fileRef} type="file" className="hidden" onChange={onFileChange} />
+      <BagFilePicker
+        open={filePickerOpen}
+        onClose={() => setFilePickerOpen(false)}
+        onPickDevice={() => fileRef.current?.click()}
+        onPickBagFile={setStagedFile}
+      />
     </div>
   );
 }
