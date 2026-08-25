@@ -40,7 +40,7 @@ export const config = {
   frontendUrl: process.env.VITE_FRONTEND_URL || 'http://localhost:5173',
   tts_provider: process.env.TTS_PROVIDER || 'gemini',
   ffmpeg: process.env.FFMPEG_PATH || 'ffmpeg',
-  gemini_tts_model: process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts',
+  gemini_tts_model: process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview',
   tts_voice_gemini: process.env.TTS_VOICE_GEMINI || 'Kore',
   tts_voice_alt_gemini: process.env.TTS_VOICE_ALT_GEMINI || 'Charon',
   tts_voice_edge: process.env.TTS_VOICE_EDGE || 'en-US-AvaNeural',

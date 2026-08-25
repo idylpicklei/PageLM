@@ -46,7 +46,7 @@
     "gemini_model": "gemini-3.5-flash",
     "gemini_embed_model": "gemini-embedding-001",
     "TTS_PROVIDER": "gemini",
-    "GEMINI_TTS_MODEL": "gemini-3.5-flash-preview-tts",
+    "GEMINI_TTS_MODEL": "gemini-3.1-flash-tts-preview",
     "TTS_VOICE_GEMINI": "Kore",
     "TTS_VOICE_ALT_GEMINI": "Charon",
     "db_mode": "json",

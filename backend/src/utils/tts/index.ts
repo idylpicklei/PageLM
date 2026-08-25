@@ -178,6 +178,7 @@ function geminiTtsModels(): string[] {
   return Array.from(new Set([
     resolvedGeminiTtsModel,
     config.gemini_tts_model,
+    "gemini-3.1-flash-tts-preview",
     "gemini-2.5-flash-preview-tts",
     "gemini-2.5-flash-tts",
   ].filter(Boolean)))
