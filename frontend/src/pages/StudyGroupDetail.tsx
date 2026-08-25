@@ -4,7 +4,7 @@ import { useAuth } from "../components/AuthProvider";
 import { PickBagFileModal, PickNoteModal, PickSkillModal } from "../components/LearningBag/BagPickers";
 import {
   deleteStudyGroup,
-  ensureDefaultSkills,
+  listSkills,
   getStudyGroup,
   leaveStudyGroup,
   listFlashcards,
@@ -63,11 +63,11 @@ export default function StudyGroupDetail() {
 
   useEffect(() => {
     void Promise.all([
-      ensureDefaultSkills().catch(() => [] as BagSkill[]),
+      listSkills().catch(() => ({ skills: [] as BagSkill[] })),
       listLibraryFiles().catch(() => ({ files: [] as LibraryFile[] })),
       listFlashcards().catch(() => ({ flashcards: [] as SavedFlashcard[] })),
-    ]).then(([skillList, fileRes, noteRes]) => {
-      setSkills(skillList || []);
+    ]).then(([skillRes, fileRes, noteRes]) => {
+      setSkills(skillRes.skills || []);
       setFiles(fileRes.files || []);
       setNotes(noteRes.flashcards || []);
     });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { env } from "../config/env";
-import { chatJSON, getChatDetail, getResponseLength, type FlashCard, createFlashcard, listFlashcards, deleteFlashcard, getChats, type ChatMessage, type LibraryFile, type BagSkill, podcastStart, listLibraryFiles, clearLibraryFiles, ensureDefaultSkills } from "../lib/api";
+import { chatJSON, getChatDetail, getResponseLength, type FlashCard, createFlashcard, listFlashcards, deleteFlashcard, getChats, type ChatMessage, type LibraryFile, type BagSkill, podcastStart, listLibraryFiles, clearLibraryFiles, listSkills } from "../lib/api";
 import MarkdownView from "../components/Chat/MarkdownView";
 import ActionRow from "../components/Chat/ActionRow";
 import FlashCards from "../components/Chat/FlashCards";
@@ -297,7 +297,7 @@ export default function Chat() {
         const [res, fileRes, skillList] = await Promise.all([
           listFlashcards(),
           listLibraryFiles(),
-          ensureDefaultSkills().catch(() => [] as BagSkill[]),
+          listSkills().catch(() => ({ skills: [] as BagSkill[] })),
         ]);
         const items = (res.flashcards || []).map<BagItem>((c) => ({
           id: c.id,
@@ -307,7 +307,7 @@ export default function Chat() {
         }));
         setBag(items.sort((a, b) => (a.id > b.id ? -1 : 1)));
         setBagFiles(fileRes.files || []);
-        setBagSkills(skillList || []);
+        setBagSkills(skillList.skills || []);
         const s = new Set<string>();
         for (const it of items) s.add(keyFor(it.kind, it.title, it.content));
         seenRef.current = s;

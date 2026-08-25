@@ -9,9 +9,45 @@ export type SkillRecord = {
   created: number;
 };
 
+const EXAMPLE_SKILLS = [
+  {
+    name: "Make flashcards",
+    prompt:
+      "Using the attached file, create 12 numbered flashcards. For each card, give a clear question and a concise answer. Format as Q/A pairs I can study from.",
+  },
+  {
+    name: "Quiz me",
+    prompt:
+      "Using the attached file, write a short multiple-choice quiz with 8 questions. Include 4 options per question, mark the correct answer, and add a one-sentence explanation for each.",
+  },
+  {
+    name: "Summarize",
+    prompt:
+      "Using the attached file, write a study-guide summary with key concepts, definitions, and a short list of things to review before an exam.",
+  },
+];
+
+function isExampleSkill(skill: SkillRecord): boolean {
+  const name = String(skill.name || "").trim();
+  const prompt = String(skill.prompt || "").trim();
+  return EXAMPLE_SKILLS.some((example) => example.name === name && example.prompt === prompt);
+}
+
 async function loadSkills(): Promise<SkillRecord[]> {
   const rows = (await db.get(INDEX_KEY)) as SkillRecord[] | undefined;
   return Array.isArray(rows) ? rows : [];
+}
+
+async function loadUserSkills(): Promise<SkillRecord[]> {
+  const stored = await loadSkills();
+  const skills = stored.filter((skill) => !isExampleSkill(skill));
+  if (skills.length !== stored.length) {
+    await saveSkills(skills);
+    for (const skill of stored.filter(isExampleSkill)) {
+      await db.delete(`skill:${skill.id}`);
+    }
+  }
+  return skills;
 }
 
 async function saveSkills(skills: SkillRecord[]): Promise<void> {
@@ -21,7 +57,7 @@ async function saveSkills(skills: SkillRecord[]): Promise<void> {
 export function skillRoutes(app: any) {
   app.get("/skills", async (_req: any, res: any) => {
     try {
-      const skills = await loadSkills();
+      const skills = await loadUserSkills();
       res.send({ ok: true, skills });
     } catch (e: any) {
       res.status(500).send({ ok: false, error: e?.message || "failed" });
@@ -42,7 +78,7 @@ export function skillRoutes(app: any) {
         created: Date.now(),
       };
 
-      const skills = await loadSkills();
+      const skills = await loadUserSkills();
       skills.unshift(skill);
       await db.set(`skill:${skill.id}`, skill);
       await saveSkills(skills);
@@ -62,7 +98,7 @@ export function skillRoutes(app: any) {
       if (!name) return res.status(400).send({ error: "name required" });
       if (!prompt) return res.status(400).send({ error: "prompt required" });
 
-      const skills = await loadSkills();
+      const skills = await loadUserSkills();
       const idx = skills.findIndex((s) => s.id === id);
       if (idx < 0) return res.status(404).send({ error: "not found" });
 
@@ -82,7 +118,7 @@ export function skillRoutes(app: any) {
       if (!id) return res.status(400).send({ error: "id required" });
 
       await db.delete(`skill:${id}`);
-      const skills = (await loadSkills()).filter((s) => s.id !== id);
+      const skills = (await loadUserSkills()).filter((s) => s.id !== id);
       await saveSkills(skills);
       res.send({ ok: true });
     } catch (e: any) {

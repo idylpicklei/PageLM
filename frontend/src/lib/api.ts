@@ -492,7 +492,7 @@ export function libraryFileDownloadUrl(id: string): string {
   return `${env.backend}/api/files/object?key=${encodeURIComponent(id)}`;
 }
 
-const DEFAULT_BAG_SKILLS: Array<{ name: string; prompt: string }> = [
+const EXAMPLE_BAG_SKILLS = [
   {
     name: "Make flashcards",
     prompt:
@@ -510,10 +510,17 @@ const DEFAULT_BAG_SKILLS: Array<{ name: string; prompt: string }> = [
   },
 ];
 
+function isExampleBagSkill(skill: { name?: string; prompt?: string }) {
+  const name = String(skill.name || "").trim();
+  const prompt = String(skill.prompt || "").trim();
+  return EXAMPLE_BAG_SKILLS.some((example) => example.name === name && example.prompt === prompt);
+}
+
 export async function listSkills() {
-  return req<{ ok: true; skills: BagSkill[] }>(`${env.backend}/skills`, {
+  const res = await req<{ ok: true; skills: BagSkill[] }>(`${env.backend}/skills`, {
     method: "GET",
   });
+  return { ...res, skills: (res.skills || []).filter((skill) => !isExampleBagSkill(skill)) };
 }
 
 export async function createSkill(input: { name: string; prompt: string }) {
@@ -536,17 +543,6 @@ export async function deleteSkill(id: string) {
   return req<{ ok: true }>(`${env.backend}/skills/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
-}
-
-export async function ensureDefaultSkills(): Promise<BagSkill[]> {
-  const res = await listSkills();
-  if (res.skills?.length) return res.skills;
-  const created: BagSkill[] = [];
-  for (const starter of DEFAULT_BAG_SKILLS) {
-    const out = await createSkill(starter);
-    created.push(out.skill);
-  }
-  return created;
 }
 
 export async function libraryFileToUpload(item: LibraryFile): Promise<File> {

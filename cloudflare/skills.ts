@@ -11,7 +11,7 @@ type SkillEnv = {
   DB: D1Database;
 };
 
-const DEFAULT_SKILLS: Array<{ name: string; prompt: string }> = [
+const EXAMPLE_SKILLS = [
   {
     name: "Make flashcards",
     prompt:
@@ -28,6 +28,12 @@ const DEFAULT_SKILLS: Array<{ name: string; prompt: string }> = [
       "Using the attached file, write a study-guide summary with key concepts, definitions, and a short list of things to review before an exam.",
   },
 ];
+
+function isExampleSkill(skill: SkillRecord): boolean {
+  const name = String(skill.name || "").trim();
+  const prompt = String(skill.prompt || "").trim();
+  return EXAMPLE_SKILLS.some((example) => example.name === name && example.prompt === prompt);
+}
 
 function json(data: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -77,14 +83,9 @@ export async function handleSkillRoutes(
   if (!user) return json({ error: "unauthorized" }, { status: 401 });
 
   if (pathname === "/skills" && request.method === "GET") {
-    let skills = await loadSkills(env.DB, user.id);
-    if (!skills.length) {
-      skills = DEFAULT_SKILLS.map((starter) => ({
-        id: crypto.randomUUID(),
-        name: starter.name,
-        prompt: starter.prompt,
-        created: Date.now(),
-      }));
+    const stored = await loadSkills(env.DB, user.id);
+    const skills = stored.filter((skill) => !isExampleSkill(skill));
+    if (skills.length !== stored.length) {
       await saveSkills(env.DB, user.id, skills);
     }
     return json({ ok: true, skills });
@@ -99,7 +100,7 @@ export async function handleSkillRoutes(
       prompt: parsed.prompt,
       created: Date.now(),
     };
-    const skills = await loadSkills(env.DB, user.id);
+    const skills = (await loadSkills(env.DB, user.id)).filter((item) => !isExampleSkill(item));
     skills.unshift(skill);
     await saveSkills(env.DB, user.id, skills);
     return json({ ok: true, skill });
@@ -111,7 +112,7 @@ export async function handleSkillRoutes(
   if (request.method === "PUT") {
     const parsed = parseSkillBody(await request.json().catch(() => ({})));
     if (parsed instanceof Response) return parsed;
-    const skills = await loadSkills(env.DB, user.id);
+    const skills = (await loadSkills(env.DB, user.id)).filter((item) => !isExampleSkill(item));
     const idx = skills.findIndex((s) => s.id === id);
     if (idx < 0) return json({ error: "not found" }, { status: 404 });
     const updated: SkillRecord = { ...skills[idx], name: parsed.name, prompt: parsed.prompt };
@@ -121,7 +122,7 @@ export async function handleSkillRoutes(
   }
 
   if (request.method === "DELETE") {
-    const skills = (await loadSkills(env.DB, user.id)).filter((s) => s.id !== id);
+    const skills = (await loadSkills(env.DB, user.id)).filter((s) => s.id !== id && !isExampleSkill(s));
     await saveSkills(env.DB, user.id, skills);
     return json({ ok: true });
   }

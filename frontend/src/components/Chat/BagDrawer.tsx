@@ -88,27 +88,15 @@ export default function BagDrawer({
               </div>
             ) : (
               <div className="space-y-6">
-                {skills.length > 0 && (
+                {items.length > 0 && (
                   <section>
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <h3 className="text-xs uppercase tracking-wide text-stone-400">Skills</h3>
-                      <Link to="/cards" className="text-xs text-orange-300 hover:text-orange-200" onClick={onClose}>
-                        Manage
-                      </Link>
-                    </div>
+                    <h3 className="text-xs uppercase tracking-wide text-stone-400 mb-3">Cards & notes</h3>
                     <div className="space-y-3">
-                      {skills.map((skill) => (
-                        <div key={skill.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3">
-                          <div className="text-white font-medium">{skill.name}</div>
-                          <div className="text-stone-400 text-xs mt-1 line-clamp-2">{skill.prompt}</div>
-                          <button
-                            type="button"
-                            onClick={() => setPickFileForSkill(skill)}
-                            disabled={runBusy || !files.length}
-                            className="mt-2 text-xs text-orange-300 hover:text-orange-200 disabled:opacity-50"
-                          >
-                            Run
-                          </button>
+                      {items.map((b) => (
+                        <div key={b.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3">
+                          <div className="text-xs uppercase tracking-wide text-stone-400 mb-1">{b.kind}</div>
+                          <div className="text-white font-medium">{b.title}</div>
+                          <div className="text-stone-300 text-sm mt-1">{b.content}</div>
                         </div>
                       ))}
                     </div>
@@ -148,15 +136,27 @@ export default function BagDrawer({
                   </section>
                 )}
 
-                {items.length > 0 && (
+                {skills.length > 0 && (
                   <section>
-                    <h3 className="text-xs uppercase tracking-wide text-stone-400 mb-3">Cards & notes</h3>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h3 className="text-xs uppercase tracking-wide text-stone-400">Skills</h3>
+                      <Link to="/cards" className="text-xs text-orange-300 hover:text-orange-200" onClick={onClose}>
+                        Manage
+                      </Link>
+                    </div>
                     <div className="space-y-3">
-                      {items.map((b) => (
-                        <div key={b.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3">
-                          <div className="text-xs uppercase tracking-wide text-stone-400 mb-1">{b.kind}</div>
-                          <div className="text-white font-medium">{b.title}</div>
-                          <div className="text-stone-300 text-sm mt-1">{b.content}</div>
+                      {skills.map((skill) => (
+                        <div key={skill.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3">
+                          <div className="text-white font-medium">{skill.name}</div>
+                          <div className="text-stone-400 text-xs mt-1 line-clamp-2">{skill.prompt}</div>
+                          <button
+                            type="button"
+                            onClick={() => setPickFileForSkill(skill)}
+                            disabled={runBusy || !files.length}
+                            className="mt-2 text-xs text-orange-300 hover:text-orange-200 disabled:opacity-50"
+                          >
+                            Run
+                          </button>
                         </div>
                       ))}
                     </div>
