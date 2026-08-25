@@ -39,7 +39,7 @@ function skillsKey(userId: string): string {
   return `keyv:user:${userId}:skills`;
 }
 
-async function loadSkills(db: D1Database, userId: string): Promise<SkillRecord[]> {
+export async function loadSkills(db: D1Database, userId: string): Promise<SkillRecord[]> {
   const row = await db.prepare("SELECT value FROM kv WHERE key = ?").bind(skillsKey(userId)).first<{ value: string }>();
   if (!row?.value) return [];
   try {
@@ -50,7 +50,7 @@ async function loadSkills(db: D1Database, userId: string): Promise<SkillRecord[]
   }
 }
 
-async function saveSkills(db: D1Database, userId: string, skills: SkillRecord[]): Promise<void> {
+export async function saveSkills(db: D1Database, userId: string, skills: SkillRecord[]): Promise<void> {
   await db
     .prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     .bind(skillsKey(userId), JSON.stringify(skills))

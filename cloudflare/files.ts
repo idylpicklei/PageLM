@@ -21,7 +21,7 @@ function json(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
-function guessMime(name: string): string {
+export function guessMime(name: string): string {
   const lower = name.toLowerCase();
   if (lower.endsWith(".pdf")) return "application/pdf";
   if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -43,6 +43,10 @@ function isExtractSidecar(key: string): boolean {
 
 export function userUploadsPrefix(userId: string): string {
   return `users/${userId}/uploads/`;
+}
+
+export function groupFilesPrefix(groupId: string): string {
+  return `groups/${groupId}/files/`;
 }
 
 export function sanitizeFileName(filename: string): string {

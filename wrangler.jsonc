@@ -72,6 +72,7 @@
       "/flashcards*",
       "/files*",
       "/skills*",
+      "/api/groups*",
       "/podcast*",
       "/smartnotes*",
       "/exam*",

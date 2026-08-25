@@ -564,6 +564,122 @@ export async function runSkillWithFile(skill: BagSkill, file: LibraryFile): Prom
   return chatId;
 }
 
+export type StudyGroupRole = "owner" | "member";
+export type StudyGroupItemKind = "skill" | "file" | "note";
+
+export type StudyGroupSummary = {
+  id: string;
+  name: string;
+  joinCode: string;
+  ownerId: string;
+  createdAt: string;
+  role: StudyGroupRole;
+};
+
+export type StudyGroupMember = {
+  id: string;
+  role: StudyGroupRole;
+  email: string;
+  joined_at: string;
+};
+
+export type StudyGroupItem = {
+  id: string;
+  kind: StudyGroupItemKind;
+  title: string;
+  payload: Record<string, unknown>;
+  r2Key: string | null;
+  sharedBy: string;
+  sharedByEmail: string;
+  created: number;
+};
+
+export type StudyGroupDetail = {
+  ok: true;
+  group: {
+    id: string;
+    name: string;
+    joinCode: string;
+    ownerId: string;
+    createdAt: string;
+  };
+  members: StudyGroupMember[];
+  items: StudyGroupItem[];
+};
+
+export async function listStudyGroups() {
+  return req<{ ok: true; groups: StudyGroupSummary[] }>(`${env.backend}/api/groups`, {
+    method: "GET",
+  });
+}
+
+export async function createStudyGroup(name: string) {
+  return req<{ ok: true; group: { id: string; name: string; joinCode: string; ownerId: string; role: StudyGroupRole } }>(`${env.backend}/api/groups`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function joinStudyGroup(code: string) {
+  return req<{ ok: true; groupId: string }>(`${env.backend}/api/groups/join`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function getStudyGroup(id: string) {
+  return req<StudyGroupDetail>(`${env.backend}/api/groups/${encodeURIComponent(id)}`, {
+    method: "GET",
+  });
+}
+
+export async function deleteStudyGroup(id: string) {
+  return req<{ ok: true }>(`${env.backend}/api/groups/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function leaveStudyGroup(id: string) {
+  return req<{ ok: true }>(`${env.backend}/api/groups/${encodeURIComponent(id)}/leave`, {
+    method: "POST",
+  });
+}
+
+export async function removeStudyGroupMember(groupId: string, userId: string) {
+  return req<{ ok: true }>(
+    `${env.backend}/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function shareToStudyGroup(groupId: string, kind: StudyGroupItemKind, sourceId: string) {
+  return req<{ ok: true; itemId: string }>(`${env.backend}/api/groups/${encodeURIComponent(groupId)}/items`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ kind, sourceId }),
+  });
+}
+
+export async function removeStudyGroupItem(groupId: string, itemId: string) {
+  return req<{ ok: true }>(
+    `${env.backend}/api/groups/${encodeURIComponent(groupId)}/items/${encodeURIComponent(itemId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function saveStudyGroupItemToBag(groupId: string, itemId: string) {
+  return req<{ ok: true; kind: StudyGroupItemKind; id: string }>(
+    `${env.backend}/api/groups/${encodeURIComponent(groupId)}/items/${encodeURIComponent(itemId)}/save`,
+    { method: "POST" }
+  );
+}
+
+export function studyGroupFileDownloadUrl(groupId: string, key: string): string {
+  return `${env.backend}/api/groups/${encodeURIComponent(groupId)}/files/object?key=${encodeURIComponent(key)}`;
+}
+
 export async function getExams() {
   return req<{ ok: true; exams: { id: string; name: string; sections: any[] }[] }>(
     `${env.backend}/exams`,

@@ -13,6 +13,7 @@ import {
 import { handleCanvasRoutes } from "./canvas";
 import { handleFileLibraryRoutes } from "./files";
 import { handleSkillRoutes } from "./skills";
+import { handleGroupRoutes } from "./groups";
 import { makeReplayableRequest } from "./replay-request";
 
 export interface Env {
@@ -53,7 +54,7 @@ const BACKEND_PREFIXES = [
   "/health",
 ];
 
-const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup", "/canvas"]);
+const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup", "/canvas", "/groups", "/groups/join"]);
 
 function isBackendRoute(pathname: string, method = "GET"): boolean {
   if (method === "GET" && SPA_GET_PATHS.has(pathname)) return false;
@@ -328,6 +329,19 @@ export default {
       } catch (err) {
         console.error("[skills]", err);
         return new Response(JSON.stringify({ error: "Could not load skills." }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    if (url.pathname === "/api/groups" || url.pathname.startsWith("/api/groups/")) {
+      try {
+        const groupsResponse = await handleGroupRoutes(request, env, url.pathname);
+        if (groupsResponse) return groupsResponse;
+      } catch (err) {
+        console.error("[groups]", err);
+        return new Response(JSON.stringify({ error: "Could not load study groups." }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
         });

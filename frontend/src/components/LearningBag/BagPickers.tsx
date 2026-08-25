@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { BagSkill, LibraryFile } from "../../lib/api";
+import type { BagSkill, LibraryFile, SavedFlashcard } from "../../lib/api";
 
 function formatBytes(size: number): string {
   if (!size) return "";
@@ -135,6 +135,74 @@ export function PickSkillModal({
               >
                 <div className="text-sm font-medium text-white">{skill.name}</div>
                 <div className="mt-1 line-clamp-2 text-xs text-stone-500">{skill.prompt}</div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type PickNoteProps = {
+  open: boolean;
+  title?: string;
+  subtitle?: string;
+  notes: SavedFlashcard[];
+  busy?: boolean;
+  onClose: () => void;
+  onPick: (note: SavedFlashcard) => void;
+};
+
+export function PickNoteModal({
+  open,
+  title = "Share a note",
+  subtitle = "Pick a flashcard or note from your learning bag.",
+  notes,
+  busy,
+  onClose,
+  onPick,
+}: PickNoteProps) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="absolute left-1/2 top-1/2 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-stone-800 bg-stone-950 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">{title}</h2>
+            <p className="mt-1 text-sm text-stone-400">{subtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-2 text-stone-400 hover:bg-stone-900 hover:text-white"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="max-h-72 space-y-2 overflow-y-auto">
+          {notes.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-zinc-800 px-3 py-6 text-center text-sm text-stone-400">
+              No flashcards or notes in your bag yet.
+            </div>
+          ) : (
+            notes.map((note) => (
+              <button
+                key={note.id}
+                type="button"
+                disabled={busy}
+                onClick={() => onPick(note)}
+                className="w-full rounded-xl border border-zinc-800 bg-stone-900/50 px-3 py-3 text-left hover:border-zinc-700 disabled:opacity-60"
+              >
+                <div className="text-xs uppercase tracking-wide text-stone-500">{note.tag === "note" ? "note" : "flashcard"}</div>
+                <div className="mt-1 text-sm font-medium text-white">{note.question}</div>
+                <div className="mt-1 line-clamp-2 text-xs text-stone-500">{note.answer}</div>
               </button>
             ))
           )}
