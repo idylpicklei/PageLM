@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   canvasDisconnect,
@@ -12,6 +12,7 @@ import {
   type CanvasCourse,
   type CanvasFile,
 } from "../lib/api";
+import { canvasCourseMatchesQuery, canvasFileMatchesQuery, canvasServerSearchQuery } from "../lib/canvasFiles";
 
 const MAX_IMPORT = 5;
 
@@ -52,14 +53,17 @@ export default function CanvasPage() {
   const [courses, setCourses] = useState<CanvasCourse[]>([]);
   const [coursesLoading, setCoursesLoading] = useState(false);
   const [coursesError, setCoursesError] = useState<string | null>(null);
+  const [courseQuery, setCourseQuery] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
 
   const [files, setFiles] = useState<CanvasFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState<string | null>(null);
+  const [fileQuery, setFileQuery] = useState("");
   const [selectedFileIds, setSelectedFileIds] = useState<Set<number>>(new Set());
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const filesRequestSeq = useRef(0);
 
   const refreshStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -101,15 +105,17 @@ export default function CanvasPage() {
     }
   }, []);
 
-  const loadFiles = useCallback(async (courseId: number) => {
+  const loadFiles = useCallback(async (courseId: number, query = "") => {
+    const seq = ++filesRequestSeq.current;
     setFilesLoading(true);
     setFilesError(null);
-    setSelectedFileIds(new Set());
     setExpired(false);
     try {
-      const res = await canvasListFiles(courseId);
+      const res = await canvasListFiles(courseId, canvasServerSearchQuery(query));
+      if (seq !== filesRequestSeq.current) return;
       setFiles(res.items);
     } catch (err: unknown) {
+      if (seq !== filesRequestSeq.current) return;
       const msg = err instanceof Error ? err.message : "Failed to load course files";
       setFilesError(msg);
       setFiles([]);
@@ -121,7 +127,7 @@ export default function CanvasPage() {
         setHost(null);
       }
     } finally {
-      setFilesLoading(false);
+      if (seq === filesRequestSeq.current) setFilesLoading(false);
     }
   }, []);
 
@@ -133,9 +139,44 @@ export default function CanvasPage() {
     if (connected) void loadCourses();
   }, [connected, loadCourses]);
 
+  const serverFileQuery = canvasServerSearchQuery(fileQuery);
+
   useEffect(() => {
-    if (connected && selectedCourseId != null) void loadFiles(selectedCourseId);
-  }, [connected, selectedCourseId, loadFiles]);
+    if (!connected || selectedCourseId == null) return;
+    const delay = serverFileQuery ? 300 : 0;
+    const handle = window.setTimeout(() => {
+      void loadFiles(selectedCourseId, serverFileQuery);
+    }, delay);
+    return () => window.clearTimeout(handle);
+  }, [connected, selectedCourseId, serverFileQuery, loadFiles]);
+
+  const selectCourse = (courseId: number) => {
+    if (courseId === selectedCourseId) return;
+    setSelectedCourseId(courseId);
+    setFileQuery("");
+    setFiles([]);
+    setSelectedFileIds(new Set());
+    setFilesError(null);
+    setImportError(null);
+  };
+
+  const visibleCourses = useMemo(
+    () => courses.filter((course) => canvasCourseMatchesQuery(course, courseQuery)),
+    [courses, courseQuery]
+  );
+
+  const visibleFiles = useMemo(
+    () => files.filter((file) => canvasFileMatchesQuery(file, fileQuery)),
+    [files, fileQuery]
+  );
+  const hiddenSelectedCount = useMemo(() => {
+    const visibleIds = new Set(visibleFiles.map((file) => file.id));
+    let hidden = 0;
+    for (const id of selectedFileIds) {
+      if (!visibleIds.has(id)) hidden += 1;
+    }
+    return hidden;
+  }, [selectedFileIds, visibleFiles]);
 
   const handleSave = async () => {
     const token = tokenInput.trim();
@@ -157,6 +198,8 @@ export default function CanvasPage() {
       setCourses([]);
       setFiles([]);
       setSelectedCourseId(null);
+      setCourseQuery("");
+      setFileQuery("");
       setSelectedFileIds(new Set());
       await loadCourses();
     } catch (err: unknown) {
@@ -185,6 +228,8 @@ export default function CanvasPage() {
       setCourses([]);
       setFiles([]);
       setSelectedCourseId(null);
+      setCourseQuery("");
+      setFileQuery("");
       setSelectedFileIds(new Set());
       setExpired(false);
       setConnectSuccess("Canvas disconnected.");
@@ -370,17 +415,46 @@ export default function CanvasPage() {
                     {coursesError}
                   </div>
                 )}
+                {courses.length > 0 && (
+                  <div className="relative mb-4">
+                    <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-500" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0Z" />
+                    </svg>
+                    <input
+                      type="search"
+                      value={courseQuery}
+                      onChange={(e) => setCourseQuery(e.target.value)}
+                      placeholder="Search courses…"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Search courses"
+                      className="w-full rounded-xl border border-zinc-800 bg-stone-900/80 py-2.5 pl-10 pr-16 text-sm text-white placeholder:text-stone-500 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                    />
+                    {courseQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setCourseQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs text-stone-400 hover:text-white"
+                        aria-label="Clear course search"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                )}
                 {coursesLoading ? (
                   <div className="text-sm text-stone-400 py-4">Loading courses…</div>
                 ) : courses.length === 0 ? (
                   <div className="text-sm text-stone-400 py-4">No active courses found.</div>
+                ) : visibleCourses.length === 0 ? (
+                  <div className="text-sm text-stone-400 py-4">No courses match “{courseQuery.trim()}”.</div>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {courses.map((course) => (
+                    {visibleCourses.map((course) => (
                       <button
                         key={course.id}
                         type="button"
-                        onClick={() => setSelectedCourseId(course.id)}
+                        onClick={() => selectCourse(course.id)}
                         className={`px-3 py-2 rounded-xl text-sm transition-colors ${
                           selectedCourseId === course.id
                             ? "bg-orange-600 text-white"
@@ -414,8 +488,54 @@ export default function CanvasPage() {
                   </div>
 
                   <p className="text-xs text-stone-500 mb-4">
-                    Check the files you want, then click Import. Supported: PDF, Word, plain text, Markdown (up to {MAX_IMPORT} files, 15 MB each).
+                    Search by file name to find materials across the course, then import up to {MAX_IMPORT} files (PDF, Word, plain text, Markdown, 15 MB each).
                   </p>
+
+                  <div className="relative mb-4">
+                    <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-500" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0Z" />
+                    </svg>
+                    <input
+                      type="search"
+                      value={fileQuery}
+                      onChange={(e) => setFileQuery(e.target.value)}
+                      placeholder="Search course files…"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Search course files"
+                      className="w-full rounded-xl border border-zinc-800 bg-stone-900/80 py-2.5 pl-10 pr-24 text-sm text-white placeholder:text-stone-500 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                    />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                      {filesLoading && (
+                        <span className="px-2 py-1 text-xs text-stone-500">
+                          {serverFileQuery ? "Searching…" : "Loading…"}
+                        </span>
+                      )}
+                      {fileQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setFileQuery("")}
+                          className="rounded-lg px-2 py-1 text-xs text-stone-400 hover:text-white"
+                          aria-label="Clear search"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
+                    <span>
+                      {fileQuery.trim()
+                        ? `${visibleFiles.length} match${visibleFiles.length === 1 ? "" : "es"}`
+                        : `${visibleFiles.length} file${visibleFiles.length === 1 ? "" : "s"}`}
+                    </span>
+                    {hiddenSelectedCount > 0 && (
+                      <span className="text-orange-300">
+                        {hiddenSelectedCount} selected file{hiddenSelectedCount === 1 ? "" : "s"} hidden by search
+                      </span>
+                    )}
+                  </div>
 
                   {importError && (
                     <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
@@ -428,13 +548,17 @@ export default function CanvasPage() {
                     </div>
                   )}
 
-                  {filesLoading ? (
+                  {filesLoading && files.length === 0 ? (
                     <div className="text-sm text-stone-400 py-8 text-center">Loading files…</div>
-                  ) : files.length === 0 ? (
-                    <div className="text-sm text-stone-400 py-8 text-center">No files found in this course.</div>
+                  ) : visibleFiles.length === 0 ? (
+                    <div className="text-sm text-stone-400 py-8 text-center">
+                      {fileQuery.trim()
+                        ? `No files match “${fileQuery.trim()}”.`
+                        : "No files found in this course."}
+                    </div>
                   ) : (
                     <div className="space-y-2">
-                      {files.map((file) => {
+                      {visibleFiles.map((file) => {
                         const checked = selectedFileIds.has(file.id);
                         return (
                           <label

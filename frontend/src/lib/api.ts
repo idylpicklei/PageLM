@@ -311,11 +311,18 @@ export async function canvasListCourses() {
   });
 }
 
-export async function canvasListFiles(courseId: number | string) {
-  return req<{ ok: true; items: CanvasFile[] }>(`${env.backend}/api/canvas/courses/${encodeURIComponent(String(courseId))}/files`, {
-    method: "GET",
-    skipAuthRedirect: true,
-  });
+export async function canvasListFiles(courseId: number | string, query?: string) {
+  const params = new URLSearchParams();
+  const q = String(query || "").trim();
+  if (q) params.set("q", q);
+  const qs = params.toString();
+  return req<{ ok: true; items: CanvasFile[]; query?: string }>(
+    `${env.backend}/api/canvas/courses/${encodeURIComponent(String(courseId))}/files${qs ? `?${qs}` : ""}`,
+    {
+      method: "GET",
+      skipAuthRedirect: true,
+    }
+  );
 }
 
 export async function canvasImportFiles(body: {

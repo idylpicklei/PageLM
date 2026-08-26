@@ -1,5 +1,6 @@
 import { getContainer } from "@cloudflare/containers";
 import { getSessionUser, type SessionUser } from "./auth";
+import { canvasSearchFromRequest, courseFilesApiPath } from "./canvas-search";
 import { consumeExternalQuota, externalRateLimitedResponse } from "./dap-rate-limit";
 import { makeReplayableRequest } from "./replay-request";
 import { listUserUploads, putUserUpload, userUploadsPrefix, type FileEnv } from "./files";
@@ -571,9 +572,10 @@ async function handleCanvasRoutesInner(
     const quota = await consumeExternalQuota(env.DB, user.id, "canvas.lms.list");
     if (!quota.allowed) return externalRateLimitedResponse(quota);
 
+    const searchTerm = canvasSearchFromRequest(request.url);
     const { items, authFailed, badResponse } = await fetchPaginated<CanvasFile>(
       creds,
-      `/api/v1/courses/${courseId}/files?per_page=50&sort=updated_at&order=desc`
+      courseFilesApiPath(courseId, searchTerm)
     );
 
     if (badResponse) {
@@ -607,7 +609,7 @@ async function handleCanvasRoutesInner(
       };
     });
 
-    return json({ ok: true, items: files });
+    return json({ ok: true, items: files, query: searchTerm || "" });
   }
 
   if (pathname === "/api/canvas/import" && request.method === "POST" && creds) {
