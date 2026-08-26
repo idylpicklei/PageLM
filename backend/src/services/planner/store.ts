@@ -50,7 +50,14 @@ export async function listTasks(filter?: { status?: string; dueBefore?: string; 
         if (filter?.course && t.course !== filter.course) continue
         tasks.push(t)
     }
-    return tasks.sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime())
+    return tasks.sort((a, b) => {
+        const aMs = Date.parse(String(a.dueAt || ""))
+        const bMs = Date.parse(String(b.dueAt || ""))
+        if (!Number.isFinite(aMs) && !Number.isFinite(bMs)) return 0
+        if (!Number.isFinite(aMs)) return 1
+        if (!Number.isFinite(bMs)) return -1
+        return aMs - bMs
+    })
 }
 
 export async function saveTaskFile(file: TaskFile): Promise<void> {

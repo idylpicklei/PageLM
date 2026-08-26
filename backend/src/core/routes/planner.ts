@@ -1,6 +1,7 @@
 import { ingestText } from "../../services/planner/ingest"
 import { plannerService } from "../../services/planner/service"
 import { CreateTaskRequest, UpdateTaskRequest, PlannerGenerateRequest, MaterialsRequest } from "../../services/planner/types"
+import { parseRecurrence } from "../../services/planner/recurrence"
 import { emitToAll } from "../../utils/chat/ws"
 import { emitLarge } from "../../utils/chat/ws"
 import { parseMultipart } from "../../lib/parser/upload"
@@ -26,13 +27,21 @@ export function plannerRoutes(app: any) {
             const isMultipart = ct.includes("multipart/form-data")
 
             if (isMultipart) {
-                const { q: text, files } = await parseMultipart(req)
-                const request: CreateTaskRequest = { text, files }
+                const { q: text, files, dueAt, recurrence } = await parseMultipart(req)
+                const request: CreateTaskRequest = {
+                    text,
+                    files,
+                    dueAt: dueAt || undefined,
+                    recurrence: recurrence ? (() => { try { return parseRecurrence(JSON.parse(recurrence)) } catch { return parseRecurrence({ freq: recurrence }) } })() : undefined,
+                }
                 const task = await plannerService.createTaskFromRequest(request)
                 res.send({ ok: true, task })
                 emitToAll(rooms.get("default"), { type: "task.created", task })
             } else {
-                const request: CreateTaskRequest = req.body
+                const request: CreateTaskRequest = {
+                    ...req.body,
+                    recurrence: req.body?.recurrence ? parseRecurrence(req.body.recurrence) : undefined,
+                }
                 const task = await plannerService.createTaskFromRequest(request)
                 res.send({ ok: true, task })
                 emitToAll(rooms.get("default"), { type: "task.created", task })
@@ -46,7 +55,11 @@ export function plannerRoutes(app: any) {
         try {
             const text = String(req.body?.text || "").trim()
             if (!text) return res.status(400).send({ ok: false, error: "text required" })
-            const task = await plannerService.createTaskFromRequest({ text })
+            const task = await plannerService.createTaskFromRequest({
+                text,
+                dueAt: req.body?.dueAt,
+                recurrence: req.body?.recurrence ? parseRecurrence(req.body.recurrence) : undefined,
+            })
             res.send({ ok: true, task })
             emitToAll(rooms.get("default"), { type: "task.created", task })
         } catch (e: any) {
@@ -184,11 +197,19 @@ export function plannerRoutes(app: any) {
 
     app.patch("/tasks/:id", async (req: any, res: any) => {
         try {
-            const updates: UpdateTaskRequest = req.body
-            const task = await plannerService.updateTask(req.params.id, updates)
-            if (!task) return res.status(404).send({ ok: false, error: "Task not found" })
-            res.send({ ok: true, task })
-            emitToAll(rooms.get("default"), { type: "task.updated", task })
+            const updates: UpdateTaskRequest = {
+                ...req.body,
+                recurrence: req.body?.recurrence !== undefined
+                    ? (req.body.recurrence ? parseRecurrence(req.body.recurrence) : undefined)
+                    : undefined,
+            }
+            const result = await plannerService.updateTask(req.params.id, updates)
+            if (!result) return res.status(404).send({ ok: false, error: "Task not found" })
+            res.send({ ok: true, task: result.task, spawned: result.spawned })
+            emitToAll(rooms.get("default"), { type: "task.updated", task: result.task })
+            if (result.spawned) {
+                emitToAll(rooms.get("default"), { type: "task.created", task: result.spawned })
+            }
         } catch (e: any) {
             res.status(500).send({ ok: false, error: e?.message || "failed" })
         }

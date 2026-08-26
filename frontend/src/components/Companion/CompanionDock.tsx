@@ -30,7 +30,20 @@ function toHistoryPayload(messages: CompanionMessage[]) {
   return messages.map(msg => ({ role: msg.role, content: msg.content }))
 }
 
+function useDesktop() {
+  const [desktop, setDesktop] = useState(false)
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)")
+    const onChange = () => setDesktop(media.matches)
+    onChange()
+    media.addEventListener("change", onChange)
+    return () => media.removeEventListener("change", onChange)
+  }, [])
+  return desktop
+}
+
 export default function CompanionDock() {
+  const desktop = useDesktop()
   const { document, open, setOpen } = useCompanion()
   const [input, setInput] = useState("")
   const [messages, setMessages] = useState<CompanionMessage[]>([])
@@ -108,21 +121,13 @@ export default function CompanionDock() {
 
   const disabled = !hasDocument || busy
 
+  if (!desktop || !open) return null;
+
   return (
     <>
-      {!open && (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-40 px-4 py-3 rounded-2xl bg-sky-500/90 hover:bg-sky-500 text-white font-medium shadow-lg shadow-sky-500/30 transition-colors"
-        >
-          Ask Dylan
-        </button>
-      )}
-
       <div
         className={cx(
-          "fixed bottom-6 right-6 z-40 w-[min(360px,calc(100vw-2rem))] max-h-[min(85vh,640px)] rounded-3xl border border-slate-800 bg-stone-950/95 backdrop-blur-xl shadow-2xl shadow-black/40 transition-all duration-300",
+          "fixed bottom-24 md:bottom-6 right-4 md:right-6 z-40 w-[min(360px,calc(100vw-2rem))] max-h-[min(70vh,640px)] rounded-3xl border border-slate-800 bg-stone-950/95 backdrop-blur-xl shadow-2xl shadow-black/40 transition-all duration-300",
           open ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"
         )}
       >

@@ -32,14 +32,14 @@ export default function PromptBox({
     >
       <div className="flex-1 p-3">
         {stagedFileName && (
-          <div className="mb-3 inline-flex items-center gap-3 bg-stone-900/60 border border-stone-800 rounded-2xl px-3 py-2">
-            <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-400/40 flex items-center justify-center">
+          <div className="mb-3 inline-flex max-w-full min-w-0 items-center gap-3 bg-stone-900/60 border border-stone-800 rounded-2xl px-3 py-2">
+            <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-400/40 flex items-center justify-center shrink-0">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-6 h-6 text-rose-300" fill="currentColor">
                 <path d="M9 2a1 1 0 0 0-1 1v4H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2V3a1 1 0 0 0-1-1H9Zm5 5H10V4h4v3Z" />
               </svg>
             </div>
-            <div className="flex flex-col -space-y-0.5">
-              <span className="text-stone-100 text-sm">{stagedFileName}</span>
+            <div className="flex flex-col -space-y-0.5 min-w-0">
+              <span className="text-stone-100 text-sm truncate">{stagedFileName}</span>
               <span className="text-stone-400 text-xs">Attached</span>
             </div>
             <button onClick={onRemoveFile} className="ml-2 text-stone-300 hover:text-white p-1 rounded-lg hover:bg-stone-800" aria-label="Remove file">

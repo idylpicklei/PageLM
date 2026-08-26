@@ -1,6 +1,12 @@
 export type TaskStatus = "todo" | "doing" | "done" | "blocked"
 
-export type TaskType = "homework" | "project" | "lab" | "essay" | "exam"
+export type TaskType = "homework" | "project" | "lab" | "essay" | "exam" | "review"
+
+export type RecurrenceFreq = "daily" | "weekly" | "biweekly" | "monthly"
+
+export type Recurrence = {
+    freq: RecurrenceFreq
+}
 
 export type PlanPolicy = {
     pomodoroMins: number // 25 default
@@ -55,6 +61,7 @@ export type Task = {
     tags?: string[]
     rubric?: string
     files?: TaskFile[]
+    recurrence?: Recurrence
 }
 
 export type Plan = {
@@ -77,6 +84,7 @@ export type CreateTaskRequest = {
     estMins?: number
     priority?: 1 | 2 | 3 | 4 | 5
     files?: any[] // File objects from multer
+    recurrence?: Recurrence
 }
 
 export type UpdateTaskRequest = Partial<Omit<Task, 'id' | 'createdAt' | 'updatedAt'>>

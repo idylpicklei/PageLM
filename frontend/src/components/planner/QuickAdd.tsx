@@ -1,26 +1,38 @@
 import { useState, useRef } from "react"
+import type { PlannerRecurrence } from "../../lib/api"
+import { RECURRENCE_OPTIONS } from "./recurrence"
+import { dueIsoFromLocalInput } from "./date"
 
 interface QuickAddProps {
-    onAdd: (data: { text?: string; files?: File[] }) => Promise<void>
+    onAdd: (data: { text?: string; files?: File[]; dueAt?: string; recurrence?: PlannerRecurrence | null }) => Promise<void>
     loading: boolean
 }
 
 export default function QuickAdd({ onAdd, loading }: QuickAddProps) {
     const [text, setText] = useState("")
+    const [dueInput, setDueInput] = useState("")
+    const [repeat, setRepeat] = useState<PlannerRecurrence["freq"] | "">("")
     const [selectedFiles, setSelectedFiles] = useState<File[]>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
 
     const handleSubmit = async () => {
         if (!text.trim() && selectedFiles.length === 0) return
-        await onAdd({ text, files: selectedFiles })
+        await onAdd({
+            text,
+            files: selectedFiles,
+            dueAt: dueInput ? dueIsoFromLocalInput(dueInput) : undefined,
+            recurrence: repeat ? { freq: repeat } : null,
+        })
         setText("")
+        setDueInput("")
+        setRepeat("")
         setSelectedFiles([])
     }
 
     const handleFileSelect = (files: FileList | null) => {
         if (!files) return
         const newFiles = Array.from(files).filter(f =>
-            f.size <= 10 * 1024 * 1024 && // 10MB limit
+            f.size <= 10 * 1024 * 1024 &&
             (f.type.includes('pdf') || f.type.includes('image') || f.type.includes('text') || f.type.includes('document'))
         )
         setSelectedFiles(prev => [...prev, ...newFiles])
@@ -42,7 +54,7 @@ export default function QuickAdd({ onAdd, loading }: QuickAddProps) {
                     <input
                         value={text}
                         onChange={e => setText(e.target.value)}
-                        placeholder="e.g. Math homework ch 5 due tomorrow 8pm ~2h"
+                        placeholder="e.g. Review Bio notes every Tuesday"
                         className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-200 placeholder:text-zinc-500 outline-none focus:ring-1 focus:ring-zinc-700"
                         onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSubmit()}
                     />
@@ -70,7 +82,30 @@ export default function QuickAdd({ onAdd, loading }: QuickAddProps) {
                     </button>
                 </div>
 
-                {/* Selected Files Display */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-stone-500 mb-1 block">Due date</span>
+                        <input
+                            type="datetime-local"
+                            value={dueInput}
+                            onChange={(e) => setDueInput(e.target.value)}
+                            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-200 text-sm outline-none focus:ring-1 focus:ring-zinc-700"
+                        />
+                    </label>
+                    <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-stone-500 mb-1 block">Repeats</span>
+                        <select
+                            value={repeat}
+                            onChange={(e) => setRepeat(e.target.value as PlannerRecurrence["freq"] | "")}
+                            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-200 text-sm outline-none focus:ring-1 focus:ring-zinc-700"
+                        >
+                            {RECURRENCE_OPTIONS.map((opt) => (
+                                <option key={opt.label} value={opt.value}>{opt.label}</option>
+                            ))}
+                        </select>
+                    </label>
+                </div>
+
                 {selectedFiles.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                         {selectedFiles.map((file, i) => (
@@ -86,26 +121,36 @@ export default function QuickAdd({ onAdd, loading }: QuickAddProps) {
                     </div>
                 )}
 
-                {/* Quick Templates */}
                 <div className="flex flex-wrap gap-2">
                     <div className="text-zinc-400 text-xs">Quick templates:</div>
                     <button
-                        onClick={() => setText("Math homework due tomorrow 8pm ~1.5h")}
+                        onClick={() => {
+                            setText("Math homework ch 5")
+                            setDueInput("")
+                            setRepeat("")
+                        }}
                         className="text-xs px-2 py-1 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
                     >
                         Math HW
                     </button>
                     <button
-                        onClick={() => setText("Read chapter for English class due Friday ~30m")}
+                        onClick={() => {
+                            setText("Read chapter for English class")
+                            setDueInput("")
+                            setRepeat("weekly")
+                        }}
                         className="text-xs px-2 py-1 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
                     >
                         Reading
                     </button>
                     <button
-                        onClick={() => setText("Study for quiz next week ~2h")}
+                        onClick={() => {
+                            setText("Review notes")
+                            setRepeat("weekly")
+                        }}
                         className="text-xs px-2 py-1 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
                     >
-                        Study
+                        Weekly review
                     </button>
                 </div>
             </div>

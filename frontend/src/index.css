@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "@cognicatch/react/style.css";
 
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   font-family: 'Schibsted Grotesk', sans-serif;
 }

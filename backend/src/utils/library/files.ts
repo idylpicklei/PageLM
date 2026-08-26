@@ -18,14 +18,14 @@ async function loadAll(): Promise<LibraryFile[]> {
 }
 
 export async function addLibraryFiles(
-  entries: Array<Omit<LibraryFile, "id" | "created">>
+  entries: Array<Omit<LibraryFile, "id" | "created"> & { id?: string }>
 ): Promise<LibraryFile[]> {
   if (!entries.length) return [];
   const rows = await loadAll();
   const created = Date.now();
   const added = entries.map((entry) => ({
     ...entry,
-    id: crypto.randomUUID(),
+    id: entry.id || crypto.randomUUID(),
     created,
   }));
   rows.unshift(...added);

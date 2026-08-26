@@ -54,7 +54,7 @@ const BACKEND_PREFIXES = [
   "/health",
 ];
 
-const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup", "/canvas", "/groups", "/groups/join"]);
+const SPA_GET_PATHS = new Set(["/chat", "/quiz", "/planner", "/debate", "/exam", "/login", "/signup", "/canvas", "/groups", "/groups/join", "/cards", "/study"]);
 
 function isBackendRoute(pathname: string, method = "GET"): boolean {
   if (method === "GET" && SPA_GET_PATHS.has(pathname)) return false;
@@ -174,16 +174,32 @@ function buildContainerEnv(request: Request, env: Env): Record<string, string> {
   return vars;
 }
 
+function isWebSocketRequest(request: Request): boolean {
+  return request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+}
+
+function isContainerWarmupError(text: string): boolean {
+  return /no Container instance available|currently provisioning|suddenly disconnected|Network connection lost|not running|reset because its code was updated|The app is still starting/i.test(text);
+}
+
 export class PageLMContainer extends Container {
   defaultPort = 5000;
   sleepAfter = "1h";
   enableInternet = true;
   pingEndpoint = "/health";
 
+  override onError(error: unknown) {
+    console.error("[container] error", error);
+  }
+
   override async fetch(request: Request): Promise<Response> {
     this.envVars = buildContainerEnv(request, this.env);
-    const running = Boolean((this as { container?: { running?: boolean } }).container?.running);
-    if (!running) {
+    try {
+      return await super.fetch(request);
+    } catch (err) {
+      const text = String(err instanceof Error ? err.message : err);
+      console.error("[container] fetch failed", err);
+      if (!isContainerWarmupError(text)) throw err;
       try {
         await this.startAndWaitForPorts({
           ports: [5000],
@@ -193,16 +209,13 @@ export class PageLMContainer extends Container {
             portReadyTimeoutMS: 90_000,
           },
         });
-      } catch (err) {
-        console.error("[container] start wait failed", err);
+        return await super.fetch(request);
+      } catch (startErr) {
+        console.error("[container] start wait failed", startErr);
+        return containerWarmupResponse();
       }
     }
-    return super.fetch(request);
   }
-}
-
-function isContainerWarmupError(text: string): boolean {
-  return /no Container instance available|currently provisioning|suddenly disconnected/i.test(text);
 }
 
 function containerWarmupResponse(): Response {
@@ -221,18 +234,22 @@ function containerWarmupResponse(): Response {
 }
 
 async function fetchContainer(container: { fetch(request: Request): Promise<Response> }, request: Request): Promise<Response> {
+  if (isWebSocketRequest(request)) {
+    return container.fetch(request);
+  }
+
   const replay = await makeReplayableRequest(request);
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 8; attempt++) {
     try {
       const last = await container.fetch(replay());
       if (last.ok) return last;
       const text = await last.clone().text().catch(() => "");
-      if (!isContainerWarmupError(text)) return last;
+      if (!isContainerWarmupError(text) && last.status !== 503) return last;
     } catch (err) {
       const text = String(err instanceof Error ? err.message : err);
       if (!isContainerWarmupError(text) && !/used body/i.test(text)) throw err;
     }
-    if (attempt < 4) await scheduler.wait(2000 * (attempt + 1));
+    if (attempt < 7) await scheduler.wait(Math.min(4000, 800 * (attempt + 1)));
   }
   return containerWarmupResponse();
 }

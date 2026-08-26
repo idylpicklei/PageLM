@@ -1,9 +1,18 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { libraryFileDownloadUrl, runSkillWithFile, type BagSkill, type LibraryFile } from "../../lib/api";
-import { PickBagFileModal } from "../LearningBag/BagPickers";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  createStudyGroup,
+  libraryFileDownloadUrl,
+  listStudyGroups,
+  runSkillWithFile,
+  shareToStudyGroup,
+  type BagSkill,
+  type LibraryFile,
+  type StudyGroupSummary,
+} from "../../lib/api";
+import { PickBagFileModal, PickStudyGroupModal } from "../LearningBag/BagPickers";
 
-type Item = { id: string; kind: "flashcard" | "note"; title: string; content: string };
+type Item = { id: string; kind: "flashcard" | "note"; title: string; content: string; group?: string };
 
 type Props = {
   open: boolean;
@@ -13,7 +22,7 @@ type Props = {
   onClose: () => void;
   onClear: () => void;
   onOpenFile?: (file: LibraryFile) => void;
-  onSkillChatStarted?: (chatId: string) => void;
+  onSkillChatStarted?: (chatId: string, prompt: string) => void;
 };
 
 function formatBytes(size: number): string {
@@ -33,11 +42,31 @@ export default function BagDrawer({
   onOpenFile,
   onSkillChatStarted,
 }: Props) {
+  const navigate = useNavigate();
   const [pickFileForSkill, setPickFileForSkill] = useState<BagSkill | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [studyGroups, setStudyGroups] = useState<StudyGroupSummary[]>([]);
+  const [shareFolder, setShareFolder] = useState<string | null>(null);
 
   if (!open) return null;
+
+  const shareDeck = async (groupId: string, folder: string) => {
+    setRunBusy(true);
+    setRunError(null);
+    try {
+      await shareToStudyGroup(groupId, "deck", folder, {
+        cards: items
+          .filter((item) => item.kind !== "note" && (item.group || "Ungrouped") === folder)
+          .map((item) => ({ question: item.title, answer: item.content, tag: "core" })),
+      });
+      setShareFolder(null);
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : "Could not share that folder.");
+    } finally {
+      setRunBusy(false);
+    }
+  };
 
   const empty = items.length === 0 && files.length === 0 && skills.length === 0;
 
@@ -48,7 +77,7 @@ export default function BagDrawer({
       const chatId = await runSkillWithFile(skill, file);
       setPickFileForSkill(null);
       onClose();
-      onSkillChatStarted?.(chatId);
+      onSkillChatStarted?.(chatId, skill.prompt);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : "Could not start chat with that skill.");
     } finally {
@@ -59,7 +88,7 @@ export default function BagDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" onClick={onClose}>
-        <div className="absolute right-4 top-4 bottom-4 w-96 bg-stone-950 border border-stone-900 rounded-2xl p-6 overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="absolute right-4 top-4 bottom-4 w-[min(24rem,calc(100vw-2rem))] bg-stone-950 border border-stone-900 rounded-2xl p-6 overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-semibold text-white flex items-center gap-2">📝 My Learning Bag</h2>
             <button onClick={onClose} className="p-2 hover:bg-stone-900 rounded-xl transition-colors">
@@ -91,13 +120,62 @@ export default function BagDrawer({
                 {items.length > 0 && (
                   <section>
                     <h3 className="text-xs uppercase tracking-wide text-stone-400 mb-3">Cards & notes</h3>
-                    <div className="space-y-3">
-                      {items.map((b) => (
-                        <div key={b.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3">
-                          <div className="text-xs uppercase tracking-wide text-stone-400 mb-1">{b.kind}</div>
-                          <div className="text-white font-medium">{b.title}</div>
-                          <div className="text-stone-300 text-sm mt-1">{b.content}</div>
-                        </div>
+                    <div className="space-y-2">
+                      {Object.entries(items.reduce<Record<string, Item[]>>((acc, item) => {
+                        const name = item.kind === "note" ? "Notes" : (item.group || "Ungrouped");
+                        (acc[name] ||= []).push(item);
+                        return acc;
+                      }, {})).map(([name, cards]) => (
+                        <details key={name} className="rounded-xl border border-stone-800 bg-stone-900/40 overflow-hidden">
+                          <summary className="cursor-pointer list-none px-3 py-2.5 flex flex-wrap items-center gap-2 hover:bg-stone-900/70">
+                            <svg viewBox="0 0 24 24" className="size-4 shrink-0 text-orange-300" fill="currentColor">
+                              <path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" />
+                            </svg>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-white text-sm font-medium truncate">{name}</div>
+                              <div className="text-[11px] text-stone-500">{cards.length} card{cards.length === 1 ? "" : "s"}</div>
+                            </div>
+                            {name !== "Notes" && (
+                              <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    onClose();
+                                    navigate(`/study?group=${encodeURIComponent(name)}`);
+                                  }}
+                                  className="rounded-md border border-orange-800/70 px-2 py-1 text-[11px] text-orange-200 hover:bg-orange-900/30"
+                                >
+                                  Study
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    void listStudyGroups()
+                                      .then((res) => setStudyGroups(res.groups || []))
+                                      .catch(() => setStudyGroups([]));
+                                    setShareFolder(name);
+                                  }}
+                                  className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-stone-300 hover:text-white"
+                                >
+                                  Share
+                                </button>
+                              </div>
+                            )}
+                          </summary>
+                          <div className="space-y-2 p-3 pt-0">
+                            {cards.map((b) => (
+                              <div key={b.id} className="bg-stone-950/80 border border-stone-800 rounded-xl p-3">
+                                <div className="text-xs uppercase tracking-wide text-stone-400 mb-1">{b.kind}</div>
+                                <div className="text-white font-medium">{b.title}</div>
+                                <div className="text-stone-300 text-sm mt-1">{b.content}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
                       ))}
                     </div>
                   </section>
@@ -108,13 +186,14 @@ export default function BagDrawer({
                     <h3 className="text-xs uppercase tracking-wide text-stone-400 mb-3">Files</h3>
                     <div className="space-y-3">
                       {files.map((file) => (
-                        <div key={file.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3">
+                        <div key={file.id} className="bg-stone-900/60 border border-stone-800 rounded-xl p-3 min-w-0 overflow-hidden">
                           <div className="text-xs uppercase tracking-wide text-orange-300 mb-1">
                             {file.source === "canvas" ? "Canvas file" : "File"}
                           </div>
                           <div className="text-white font-medium truncate">{file.filename}</div>
-                          <div className="text-stone-400 text-xs mt-1">
-                            {[formatBytes(file.size), file.mimeType].filter(Boolean).join(" · ")}
+                          <div className="text-stone-400 text-xs mt-1 truncate">
+                            {formatBytes(file.size)}
+                            {file.mimeType ? <span className="hidden sm:inline"> · {file.mimeType}</span> : null}
                           </div>
                           <div className="mt-2 flex gap-3">
                             <a href={libraryFileDownloadUrl(file.id)} className="text-xs text-orange-300 hover:text-orange-200">
@@ -182,6 +261,31 @@ export default function BagDrawer({
         onClose={() => setPickFileForSkill(null)}
         onPick={(file) => {
           if (pickFileForSkill) void handleRunSkill(pickFileForSkill, file);
+        }}
+      />
+
+      <PickStudyGroupModal
+        open={Boolean(shareFolder)}
+        title={shareFolder ? `Share ${shareFolder}` : "Share folder"}
+        groups={studyGroups}
+        busy={runBusy}
+        onClose={() => setShareFolder(null)}
+        onPick={(group) => {
+          if (shareFolder) void shareDeck(group.id, shareFolder);
+        }}
+        onCreate={(name) => {
+          void (async () => {
+            if (!shareFolder) return;
+            setRunBusy(true);
+            setRunError(null);
+            try {
+              const created = await createStudyGroup(name);
+              await shareDeck(created.group.id, shareFolder);
+            } catch (err) {
+              setRunError(err instanceof Error ? err.message : "Could not create that group.");
+              setRunBusy(false);
+            }
+          })();
         }}
       />
     </>

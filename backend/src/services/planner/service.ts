@@ -1,6 +1,7 @@
 import { Task, Slot, PlanPolicy, CreateTaskRequest, UpdateTaskRequest, PlannerGenerateRequest, MaterialsRequest } from "./types"
 import { createTask, getTask, updateTask, deleteTask, listTasks } from "./store"
 import { parseTask, generateSteps, makeSlots, replan, calculateUrgencyScore } from "./ai"
+import { nextOccurrence, parseRecurrence } from "./recurrence"
 import { planTask, planTasks, weeklyPlan, defaultPolicy } from "./scheduler"
 import { handleAsk } from "../../lib/ai/ask"
 import crypto from "crypto"
@@ -34,6 +35,12 @@ function shiftSlotsByDueChange(slots: Slot[], fromDue: string, toDue: string): S
     }))
 }
 
+function resolveDueAt(value: unknown): string {
+    return normalizeDueAt(value) || ""
+}
+
+export type UpdateTaskResult = { task: Task; spawned?: Task }
+
 export class PlannerService {
     private policy: PlanPolicy
 
@@ -43,6 +50,8 @@ export class PlannerService {
 
     async createTaskFromRequest(req: CreateTaskRequest): Promise<Task> {
         let taskData: Partial<Task>
+        const explicitDue = req.dueAt ? normalizeDueAt(req.dueAt) : null
+        const recurrence = parseRecurrence(req.recurrence)
 
         if (req.text) {
             taskData = await parseTask(req.text)
@@ -51,7 +60,7 @@ export class PlannerService {
             if (req.title) taskData.title = req.title
             if (req.type) taskData.type = req.type
             if (req.notes) taskData.notes = req.notes
-            if (req.dueAt) taskData.dueAt = req.dueAt
+            if (explicitDue) taskData.dueAt = explicitDue
             if (req.estMins) taskData.estMins = req.estMins
             if (req.priority) taskData.priority = req.priority
         } else {
@@ -60,13 +69,15 @@ export class PlannerService {
                 course: req.course,
                 type: req.type,
                 notes: req.notes,
-                dueAt: req.dueAt || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                dueAt: explicitDue || "",
                 estMins: req.estMins || 60,
                 priority: req.priority || 3
             }
         }
 
-        const tempTask = { ...taskData, id: 'temp' } as Task
+        if (recurrence) taskData.recurrence = recurrence
+
+        const tempTask = { ...taskData, id: 'temp', dueAt: taskData.dueAt || "" } as Task
         const steps = await generateSteps(tempTask)
         taskData.steps = steps
 
@@ -75,11 +86,12 @@ export class PlannerService {
             course: taskData.course,
             type: taskData.type,
             notes: taskData.notes,
-            dueAt: taskData.dueAt || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+            dueAt: resolveDueAt(taskData.dueAt),
             estMins: taskData.estMins || 60,
             priority: taskData.priority || 3,
             status: 'todo',
-            steps: taskData.steps
+            steps: taskData.steps,
+            recurrence: taskData.recurrence,
         })
 
         if (req.files && req.files.length > 0) {
@@ -95,15 +107,18 @@ export class PlannerService {
         return getTask(id)
     }
 
-    async updateTask(id: string, req: UpdateTaskRequest): Promise<Task | null> {
+    async updateTask(id: string, req: UpdateTaskRequest): Promise<UpdateTaskResult | null> {
         const existing = await getTask(id)
         if (!existing) return null
 
         const patch: UpdateTaskRequest = { ...req }
+        if (patch.recurrence !== undefined) {
+            patch.recurrence = parseRecurrence(patch.recurrence) ?? undefined
+        }
         if (patch.dueAt != null) {
             const iso = normalizeDueAt(patch.dueAt)
             if (!iso) {
-                delete patch.dueAt
+                patch.dueAt = ""
             } else {
                 if (existing.plan?.slots?.length && existing.dueAt) {
                     patch.plan = {
@@ -121,7 +136,33 @@ export class PlannerService {
             steps = await generateSteps(updatedTask)
         }
 
-        return updateTask(id, { ...patch, steps })
+        const becomingDone = patch.status === "done" && existing.status !== "done"
+        const savedRecurrence = existing.recurrence
+
+        if (becomingDone && savedRecurrence) {
+            const donePatch = { ...patch, steps, recurrence: undefined }
+            const task = await updateTask(id, donePatch)
+            if (!task) return null
+
+            const spawned = await createTask({
+                title: existing.title,
+                course: existing.course,
+                type: existing.type,
+                notes: existing.notes,
+                dueAt: nextOccurrence(existing.dueAt, savedRecurrence.freq),
+                estMins: existing.estMins,
+                priority: existing.priority,
+                status: "todo",
+                steps: existing.steps,
+                tags: existing.tags,
+                recurrence: savedRecurrence,
+            })
+
+            return { task, spawned }
+        }
+
+        const task = await updateTask(id, { ...patch, steps })
+        return task ? { task } : null
     }
 
     async deleteTask(id: string): Promise<boolean> {
@@ -314,8 +355,9 @@ export class PlannerService {
         const upcoming: Task[] = []
 
         for (const task of tasks) {
-            const deadline = new Date(task.dueAt)
-            const hoursToDeadline = (deadline.getTime() - now.getTime()) / (1000 * 60 * 60)
+            const deadline = Date.parse(String(task.dueAt || ""))
+            if (!Number.isFinite(deadline)) continue
+            const hoursToDeadline = (deadline - now.getTime()) / (1000 * 60 * 60)
 
             const hasScheduledWork = task.plan?.slots?.some(s => new Date(s.start) >= now)
 

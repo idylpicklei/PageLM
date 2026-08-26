@@ -12,11 +12,13 @@ export default function App() {
       />
       <div className="bg-black text-stone-300 min-h-screen flex flex-col">
         <Sidebar />
-        <div className="flex-1 relative">
+        <div className="flex-1 relative pb-20 md:pb-0 min-w-0 overflow-x-hidden">
           <Outlet />
         </div>
       </div>
-      <CompanionDock />
+      <div className="hidden md:contents">
+        <CompanionDock />
+      </div>
     </CompanionProvider>
   );
 }

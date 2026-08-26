@@ -2,7 +2,7 @@ import { getContainer } from "@cloudflare/containers";
 import { getSessionUser, type SessionUser } from "./auth";
 import { consumeExternalQuota, externalRateLimitedResponse } from "./dap-rate-limit";
 import { makeReplayableRequest } from "./replay-request";
-import { listUserUploads, putUserUpload, type FileEnv } from "./files";
+import { listUserUploads, putUserUpload, userUploadsPrefix, type FileEnv } from "./files";
 
 export type CanvasEnv = FileEnv & {
   CANVAS_TOKEN_KEY?: string;
@@ -710,12 +710,19 @@ async function handleCanvasRoutesInner(
     }
 
     const wanted = new Set(downloaded.map((file) => file.filename.toLowerCase()));
-    let stored = (await listUserUploads(env, user.id)).filter((file) => wanted.has(file.filename.toLowerCase()));
-    // Only write from the Worker if the backend never stored the object.
-    if (!backendRes?.ok && !stored.length) {
-      for (const file of downloaded) {
-        stored.push(await putUserUpload(env, user.id, file, "canvas"));
-      }
+    const stored: Awaited<ReturnType<typeof listUserUploads>> = [];
+    const existing = await listUserUploads(env, user.id);
+    const have = new Set(
+      existing
+        .filter((file) => wanted.has(file.filename.toLowerCase()) && file.id.startsWith(userUploadsPrefix(user.id)))
+        .map((file) => {
+          stored.push(file);
+          return file.filename.toLowerCase();
+        })
+    );
+    for (const file of downloaded) {
+      if (have.has(file.filename.toLowerCase())) continue;
+      stored.push(await putUserUpload(env, user.id, file, "canvas"));
     }
 
     return json({

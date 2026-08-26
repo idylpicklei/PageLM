@@ -5,7 +5,7 @@ import QuickAdd from "./QuickAdd"
 import WeekBoard from "./WeekBoard"
 import MonthCalendar from "./MonthCalendar"
 import { dueMs, formatDue, toLocalInput } from "./date"
-import { connectPlannerStream, plannerDelete, plannerIngest, plannerList, plannerMaterials, plannerPlan, plannerUpdate, plannerWeekly, plannerCreateWithFiles, plannerUploadFiles, plannerDeleteFile, type PlannerEvent, type PlannerSlot, type PlannerTask, type WeeklyPlan } from "../../lib/api"
+import { connectPlannerStream, plannerDelete, plannerIngest, plannerList, plannerMaterials, plannerPlan, plannerUpdate, plannerWeekly, plannerCreateWithFiles, plannerUploadFiles, plannerDeleteFile, type PlannerEvent, type PlannerRecurrence, type PlannerSlot, type PlannerTask, type WeeklyPlan } from "../../lib/api"
 
 function fmtTime(ts: number) {
     const d = new Date(ts)
@@ -159,22 +159,24 @@ export default function Planner() {
 
     useEffect(() => { void reload() }, [])
 
-    const add = async (data?: { text?: string; files?: File[] }) => {
+    const add = async (data?: { text?: string; files?: File[]; dueAt?: string; recurrence?: PlannerRecurrence | null }) => {
         const taskText = data?.text || text
         const taskFiles = data?.files || selectedFiles
+        const dueAt = data?.dueAt
+        const recurrence = data?.recurrence
 
         if (!taskText.trim() && taskFiles.length === 0) return
         setLoading(true)
         try {
             if (taskFiles.length > 0) {
-                const { task } = await plannerCreateWithFiles({ text: taskText, files: taskFiles })
+                const { task } = await plannerCreateWithFiles({ text: taskText, files: taskFiles, dueAt, recurrence })
                 if (!data) {
                     setText("")
                     setSelectedFiles([])
                 }
                 setTasks(t => [task, ...t.filter(x => x.id !== task.id)])
             } else {
-                const { task } = await plannerIngest(taskText)
+                const { task } = await plannerIngest(taskText, { dueAt, recurrence })
                 if (!data) {
                     setText("")
                 }
@@ -251,8 +253,12 @@ export default function Planner() {
     }
 
     const mark = async (id: string, status: PlannerTask["status"]) => {
-        const { task } = await plannerUpdate(id, { status })
-        setTasks(t => t.map(x => x.id === id ? task : x))
+        const { task, spawned } = await plannerUpdate(id, { status })
+        setTasks(t => {
+            let next = t.map(x => x.id === id ? task : x)
+            if (spawned) next = [spawned, ...next.filter(x => x.id !== spawned.id)]
+            return next
+        })
     }
 
     const startNow = async (id: string) => {
@@ -273,6 +279,11 @@ export default function Planner() {
             const wp = await plannerWeekly(false)
             setPlan(wp.plan ?? null)
         } catch { }
+    }
+
+    const updateRecurrence = async (id: string, recurrence: PlannerRecurrence | null) => {
+        const { task } = await plannerUpdate(id, { recurrence })
+        setTasks(t => t.map(x => x.id === id ? task : x))
     }
 
     const fmtRel = (ts: number) => {
@@ -328,8 +339,8 @@ export default function Planner() {
                             </div>
                         </div>
                         {calendarRange === "month"
-                            ? <MonthCalendar tasks={tasks} onMoveDue={moveDue} />
-                            : <WeekBoard tasks={tasks} onMoveDue={moveDue} />}
+                            ? <MonthCalendar tasks={tasks} onMoveDue={moveDue} onUpdateRecurrence={updateRecurrence} />
+                            : <WeekBoard tasks={tasks} onMoveDue={moveDue} onUpdateRecurrence={updateRecurrence} />}
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <div className="lg:col-span-2">
                                 <TodayFocus
@@ -344,7 +355,7 @@ export default function Planner() {
                         </div>
                     </div>
                 ) : view === 'month' ? (
-                    <MonthCalendar tasks={tasks} onMoveDue={moveDue} />
+                    <MonthCalendar tasks={tasks} onMoveDue={moveDue} onUpdateRecurrence={updateRecurrence} />
                 ) : view === 'mindmap' ? (
                     <div className="rounded-xl border border-zinc-800 overflow-hidden h-[75vh]">
                         <PlannerMindmap

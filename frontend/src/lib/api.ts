@@ -7,7 +7,7 @@ export type ChatInfo = { id: string; title?: string; createdAt?: number };
 export type ChatsList = { ok: true; chats: ChatInfo[] };
 export type ChatDetail = { ok: true; chat: ChatInfo; messages: ChatMessage[] };
 export type ResponseLength = "short" | "medium" | "long";
-export type ChatJSONBody = { q: string; chatId?: string; length?: ResponseLength };
+export type ChatJSONBody = { q: string; chatId?: string; length?: ResponseLength; fileIds?: string[]; fileId?: string };
 export type ChatPhase = "upload_start" | "upload_done" | "generating";
 export type FlashCard = { q: string; a: string; tags?: string[] };
 export type Question = { id: number; question: string; options: string[]; correct: number; hint: string; explanation: string; imageHtml?: string; };
@@ -22,7 +22,13 @@ export type SavedFlashcard = {
   question: string;
   answer: string;
   tag: string;
+  group?: string;
   created: number;
+  due?: number;
+  interval?: number;
+  ease?: number;
+  reps?: number;
+  lapses?: number;
 };
 export type LibraryFile = {
   id: string;
@@ -351,6 +357,8 @@ export async function chatJSON(body: ChatJSONBody) {
   });
 }
 
+export const startChat = chatJSON;
+
 export async function chatMultipart(q: string, files: File[], chatId?: string) {
   const f = new FormData();
   f.append("q", q);
@@ -450,6 +458,7 @@ export async function createFlashcard(input: {
   question: string;
   answer: string;
   tag: string;
+  group?: string;
 }) {
   return req<{ ok: true; flashcard: SavedFlashcard }>(`${env.backend}/flashcards`, {
     method: "POST",
@@ -468,6 +477,39 @@ export async function deleteFlashcard(id: string) {
   return req<{ ok: true }>(`${env.backend}/flashcards/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export async function deleteFlashcardGroup(group: string) {
+  return req<{ ok: true }>(`${env.backend}/flashcards/group/${encodeURIComponent(group)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function reviewFlashcard(id: string, rating: "again" | "good") {
+  return req<{ ok: true; flashcard: SavedFlashcard }>(`${env.backend}/flashcards/review`, {
+    method: "POST",
+    headers: jsonHeaders({}),
+    body: JSON.stringify({ id, rating }),
+  });
+}
+
+export function isFlashcardDue(card: SavedFlashcard, now = Date.now()): boolean {
+  return card.due == null || card.due <= now;
+}
+
+export function countDueFlashcards(cards: SavedFlashcard[], now = Date.now()): number {
+  return cards.filter((c) => c.tag !== "note" && isFlashcardDue(c, now)).length;
+}
+
+export function countDueTomorrow(cards: SavedFlashcard[], now = Date.now()): number {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + 1);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const lo = start.getTime();
+  const hi = end.getTime();
+  return cards.filter((c) => c.due != null && c.due >= lo && c.due < hi).length;
 }
 
 export async function listLibraryFiles() {
@@ -555,13 +597,13 @@ export async function libraryFileToUpload(item: LibraryFile): Promise<File> {
 }
 
 export async function runSkillWithFile(skill: BagSkill, file: LibraryFile): Promise<string> {
-  const upload = await libraryFileToUpload(file);
-  const { chatId } = await chatMultipart(skill.prompt, [upload]);
-  return chatId;
+  const started = await chatJSON({ q: skill.prompt, fileIds: [file.id] });
+  if (!started?.chatId) throw new Error("Chat did not start.");
+  return started.chatId;
 }
 
 export type StudyGroupRole = "owner" | "member";
-export type StudyGroupItemKind = "skill" | "file" | "note";
+export type StudyGroupItemKind = "skill" | "file" | "note" | "deck";
 
 export type StudyGroupSummary = {
   id: string;
@@ -650,12 +692,48 @@ export async function removeStudyGroupMember(groupId: string, userId: string) {
   );
 }
 
-export async function shareToStudyGroup(groupId: string, kind: StudyGroupItemKind, sourceId: string) {
+export async function shareToStudyGroup(
+  groupId: string,
+  kind: StudyGroupItemKind,
+  sourceId: string,
+  extra?: { cards?: Array<{ question: string; answer: string; tag?: string }> }
+) {
   return req<{ ok: true; itemId: string }>(`${env.backend}/api/groups/${encodeURIComponent(groupId)}/items`, {
     method: "POST",
     headers: jsonHeaders({}),
-    body: JSON.stringify({ kind, sourceId }),
+    body: JSON.stringify({ kind, sourceId, cards: extra?.cards }),
   });
+}
+
+export function isSharedDeck(item: { kind?: string; payload?: Record<string, unknown> }): boolean {
+  return item.kind === "deck" || item.payload?.type === "deck" || Array.isArray(item.payload?.cards);
+}
+
+export function deckCardsFromPayload(payload: Record<string, unknown> | undefined, title = ""): SavedFlashcard[] {
+  const cards = Array.isArray(payload?.cards) ? payload.cards : [];
+  const group = String(payload?.group || title || "Shared").trim() || "Shared";
+  return cards
+    .map((raw, i) => {
+      const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      return {
+        id: `shared-${i}`,
+        question: String(row.question || "").trim(),
+        answer: String(row.answer || "").trim(),
+        tag: String(row.tag || "core"),
+        group,
+        created: Date.now(),
+      } satisfies SavedFlashcard;
+    })
+    .filter((card) => card.question && card.answer);
+}
+
+export async function getSharedDeck(groupId: string, itemId: string) {
+  const detail = await getStudyGroup(groupId);
+  const item = detail.items.find((entry) => entry.id === itemId && isSharedDeck(entry));
+  if (!item) throw new Error("Shared folder not found.");
+  const cards = deckCardsFromPayload(item.payload, item.title);
+  if (!cards.length) throw new Error("That shared folder has no flashcards.");
+  return { name: String(item.payload.group || item.title), cards };
 }
 
 export async function removeStudyGroupItem(groupId: string, itemId: string) {
@@ -669,6 +747,32 @@ export async function saveStudyGroupItemToBag(groupId: string, itemId: string) {
   return req<{ ok: true; kind: StudyGroupItemKind; id: string }>(
     `${env.backend}/api/groups/${encodeURIComponent(groupId)}/items/${encodeURIComponent(itemId)}/save`,
     { method: "POST" }
+  );
+}
+
+export type StudyGroupMessage = {
+  id: string;
+  userId: string;
+  email: string;
+  text: string;
+  created: number;
+};
+
+export async function listStudyGroupMessages(groupId: string) {
+  return req<{ ok: true; messages: StudyGroupMessage[] }>(
+    `${env.backend}/api/groups/${encodeURIComponent(groupId)}/messages`,
+    { method: "GET" }
+  );
+}
+
+export async function sendStudyGroupMessage(groupId: string, text: string) {
+  return req<{ ok: true; message: StudyGroupMessage }>(
+    `${env.backend}/api/groups/${encodeURIComponent(groupId)}/messages`,
+    {
+      method: "POST",
+      headers: jsonHeaders({}),
+      body: JSON.stringify({ text }),
+    }
   );
 }
 
@@ -838,19 +942,24 @@ export async function transcribeYouTube(youtubeUrl: string) {
   return pollTranscribeJob(started.jobId);
 }
 
+export type PlannerRecurrence = {
+  freq: "daily" | "weekly" | "biweekly" | "monthly";
+};
+
 export type PlannerTask = {
   id: string;
   course?: string;
   title: string;
   type?: string;
   notes?: string;
-  dueAt: number;
+  dueAt: number | string;
   estMins: number;
   priority: 1 | 2 | 3 | 4 | 5;
   status: "todo" | "doing" | "done" | "blocked";
-  createdAt: number;
-  updatedAt: number;
+  createdAt: number | string;
+  updatedAt: number | string;
   tags?: string[];
+  recurrence?: PlannerRecurrence;
   files?: { id: string; filename: string; originalName: string; mimeType: string; size: number; uploadedAt: number }[];
   steps?: string[];
 };
@@ -879,12 +988,19 @@ export type PlannerEvent =
   | { type: "slot.update"; taskId: string; slotId: string; done: boolean; skip: boolean }
   | { type: "done" };
 
-export async function plannerIngest(text: string) {
+export async function plannerIngest(
+  text: string,
+  opts?: { dueAt?: string; recurrence?: PlannerRecurrence | null }
+) {
   return req<{ ok: boolean; task: PlannerTask }>(`${env.backend}/tasks/ingest`, {
     method: "POST",
     headers: jsonHeaders({}),
-    body: JSON.stringify({ text })
-  })
+    body: JSON.stringify({
+      text,
+      dueAt: opts?.dueAt,
+      recurrence: opts?.recurrence || undefined,
+    }),
+  });
 }
 
 export async function plannerList(params?: { status?: string; dueBefore?: number; course?: string }) {
@@ -938,27 +1054,43 @@ export function connectPlannerStream(sid: string, onEvent: (ev: PlannerEvent) =>
   return { ws, close: () => { try { ws.close() } catch { } } }
 }
 
-export async function plannerUpdate(id: string, patch: Partial<Omit<PlannerTask, "dueAt">> & { dueAt?: number | string }) {
-  return req<{ ok: boolean; task: PlannerTask }>(`${env.backend}/tasks/${encodeURIComponent(id)}`, {
+export async function plannerUpdate(
+  id: string,
+  patch: Partial<Omit<PlannerTask, "dueAt" | "recurrence">> & {
+    dueAt?: number | string;
+    recurrence?: PlannerRecurrence | null;
+  }
+) {
+  return req<{ ok: boolean; task: PlannerTask; spawned?: PlannerTask }>(`${env.backend}/tasks/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: jsonHeaders({}),
-    body: JSON.stringify(patch)
-  })
+    body: JSON.stringify(patch),
+  });
 }
 
 export async function plannerDelete(id: string) {
   return req<{ ok: boolean }>(`${env.backend}/tasks/${encodeURIComponent(id)}`, { method: "DELETE" })
 }
 
-export async function plannerCreateWithFiles(data: { text?: string; title?: string; course?: string; type?: string; files?: File[] }) {
-  const formData = new FormData()
-  if (data.text) formData.append('q', data.text)
-  if (data.title) formData.append('title', data.title)
-  if (data.course) formData.append('course', data.course)
-  if (data.type) formData.append('type', data.type)
+export async function plannerCreateWithFiles(data: {
+  text?: string;
+  title?: string;
+  course?: string;
+  type?: string;
+  dueAt?: string;
+  recurrence?: PlannerRecurrence | null;
+  files?: File[];
+}) {
+  const formData = new FormData();
+  if (data.text) formData.append("q", data.text);
+  if (data.title) formData.append("title", data.title);
+  if (data.course) formData.append("course", data.course);
+  if (data.type) formData.append("type", data.type);
+  if (data.dueAt) formData.append("dueAt", data.dueAt);
+  if (data.recurrence) formData.append("recurrence", JSON.stringify(data.recurrence));
   if (data.files) {
     for (const file of data.files) {
-      formData.append('file', file, file.name)
+      formData.append("file", file, file.name);
     }
   }
 

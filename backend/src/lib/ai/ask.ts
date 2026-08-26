@@ -2,7 +2,7 @@ import crypto from "crypto"
 import { readStorageSync, writeStorageSync } from "../../utils/storage/store"
 import llm from "../../utils/llm/llm"
 import { execDirect } from "../../agents/runtime"
-import { hasLocalDocuments } from "../../utils/database/db"
+import { hasLocalDocuments, readNamespaceText } from "../../utils/database/db"
 import { normalizeTopic } from "../../utils/text/normalize"
 
 export type ResponseLength = "short" | "medium" | "long"
@@ -237,6 +237,17 @@ Match the answer to the question:
 Do not pad, repeat yourself, or add sections the user did not ask for.
 `.trim()
 
+export const FLASHCARD_SKILL_PROMPT = `
+You are PageLM. The user asked for flashcards from the attached document.
+Write GitHub-flavored markdown only. No JSON. No preamble.
+Follow the user's rules exactly. Prefer their requested card format.
+If they did not specify a format, use:
+### Card N
+**Q:** question
+**A:** answer
+Do not write a long lesson unless they asked for one. Stay faithful to the document.
+`.trim()
+
 const keyOf = (x: any) => crypto.createHash("sha256").update(typeof x === "string" ? x : JSON.stringify(x)).digest("hex")
 const cacheRel = (k: any) => `cache/ask/${keyOf(k)}.json`
 const readCache = (k: any) => {
@@ -293,6 +304,8 @@ function ragDocs(rag: unknown): Array<{ text?: string }> {
 }
 
 async function retrieveContext(ns: string, question: string, k: number): Promise<string> {
+  const direct = await readNamespaceText(ns)
+  if (direct.trim()) return direct
   if (!hasLocalDocuments(ns)) return "NO_CONTEXT"
   try {
     const rag = await execDirect({
@@ -308,21 +321,74 @@ async function retrieveContext(ns: string, question: string, k: number): Promise
   }
 }
 
-async function streamModel(messages: any[], onDelta?: (text: string) => void): Promise<string> {
-  if (typeof llm.stream === "function") {
-    let out = ""
-    for await (const chunk of llm.stream(messages as any)) {
-      const text = toText(chunk)
-      if (!text) continue
-      out += text
-      onDelta?.(text)
+function looksLikeFlashcardRequest(question: string): boolean {
+  return /flashcard/i.test(question) && /(create|make|generate|output only|front:|q\/a|question and)/i.test(question)
+}
+
+function parseFlashcardsFromAnswer(answer: string): AskCard[] {
+  const cards: AskCard[] = []
+  const jsonStr = extractFirstJsonObject(answer)
+  if (jsonStr) {
+    const parsed = tryParse<any>(jsonStr)
+    if (Array.isArray(parsed?.flashcards)) {
+      for (const raw of parsed.flashcards) {
+        const q = String(raw?.q ?? raw?.question ?? "").trim()
+        const a = String(raw?.a ?? raw?.answer ?? "").trim()
+        if (q && a) cards.push({ q, a, tags: Array.isArray(raw?.tags) ? raw.tags.map(String) : [] })
+      }
     }
-    return out.trim()
   }
-  const res = await llm.call(messages as any)
-  const draft = toText(res).trim()
-  if (draft) onDelta?.(draft)
-  return draft
+  const pairRe = /(?:\*\*Q:\*\*|Q:|Front:)\s*([\s\S]*?)\s*(?:\*\*A:\*\*|A:|Back:)\s*([\s\S]*?)(?=(?:\n#{2,}|\n\*\*Q:\*\*|\nQ:|\nFront:|$))/gi
+  let m: RegExpExecArray | null
+  while ((m = pairRe.exec(answer)) !== null) {
+    const q = m[1].replace(/\s+/g, " ").trim()
+    const a = m[2].replace(/\s+/g, " ").trim()
+    if (q && a && !cards.some((c) => c.q === q && c.a === a)) cards.push({ q, a })
+  }
+  return cards.slice(0, 40)
+}
+
+const LLM_TIMEOUT_MS = 90_000
+const LLM_FILE_TIMEOUT_MS = 150_000
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function streamModel(messages: any[], onDelta?: (text: string) => void, timeoutMs = LLM_TIMEOUT_MS): Promise<string> {
+  return withTimeout((async () => {
+    if (typeof llm.stream === "function") {
+      try {
+        const maybe = await llm.stream(messages as any)
+        if (maybe && typeof (maybe as any)[Symbol.asyncIterator] === "function") {
+          let out = ""
+          for await (const chunk of maybe as AsyncIterable<any>) {
+            const text = toText(chunk)
+            if (!text) continue
+            out += text
+            onDelta?.(text)
+          }
+          if (out.trim()) return out.trim()
+        }
+      } catch (err) {
+        console.warn("[ask] stream failed, falling back to call", err)
+      }
+    }
+    const res = await llm.call(messages as any)
+    const draft = toText(res).trim()
+    if (draft) onDelta?.(draft)
+    return draft
+  })(), timeoutMs, "model stream")
 }
 
 async function makeFlashcards(question: string, answer: string, length?: ResponseLength): Promise<AskCard[]> {
@@ -433,15 +499,19 @@ export async function handleChatAsk(opts: {
   const nsFinal = typeof opts.namespace === "string" && opts.namespace.trim() ? opts.namespace : "pagelm"
   const ctx = await retrieveContext(nsFinal, safeQ, 6)
   const topic = guessTopic(safeQ) || "General"
+  const flashcardMode = looksLikeFlashcardRequest(questionRaw)
+  const hasFileContext = ctx !== "NO_CONTEXT" && ctx.trim().length > 0
 
-  const messages: any[] = [{ role: "system", content: CHAT_SYSTEM_PROMPT }]
+  const messages: any[] = [{ role: "system", content: flashcardMode ? FLASHCARD_SKILL_PROMPT : CHAT_SYSTEM_PROMPT }]
   for (const msg of toConversationHistory(opts.history)) messages.push(msg)
   messages.push({
     role: "user",
-    content: `Context:\n${ctx}\n\nQuestion:\n${safeQ}\n\n${lengthInstruction(opts.length)}\nWrite the answer now.`,
+    content: `Context:\n${ctx}\n\nQuestion:\n${safeQ}\n\n${flashcardMode ? "Create the flashcards now." : `${lengthInstruction(opts.length)}\nWrite the answer now.`}`,
   })
 
-  const answer = await streamModel(messages, opts.onDelta)
-  const flashcards = await makeFlashcards(safeQ, answer, opts.length)
+  const answer = await streamModel(messages, opts.onDelta, hasFileContext || flashcardMode ? LLM_FILE_TIMEOUT_MS : LLM_TIMEOUT_MS)
+  const flashcards = flashcardMode
+    ? parseFlashcardsFromAnswer(answer)
+    : await makeFlashcards(safeQ, answer, opts.length)
   return { topic, answer, flashcards }
 }

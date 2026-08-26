@@ -12,7 +12,7 @@ import { loadSkills, saveSkills, type SkillRecord } from "./skills";
 type GroupEnv = FileEnv;
 
 export type GroupRole = "owner" | "member";
-export type GroupItemKind = "skill" | "file" | "note";
+export type GroupItemKind = "skill" | "file" | "note" | "deck";
 
 type GroupRow = {
   id: string;
@@ -32,13 +32,39 @@ type FlashcardRecord = {
   question: string;
   answer: string;
   tag: string;
+  group?: string;
   created: number;
 };
+
+function cardFolder(card: FlashcardRecord): string {
+  if (card.tag === "note") return "Notes";
+  return String(card.group || "").trim() || "Ungrouped";
+}
 
 function json(data: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
   return new Response(JSON.stringify(data), { ...init, headers });
+}
+
+function unwrapKeyv(raw: unknown): unknown {
+  let cur = raw;
+  for (let i = 0; i < 5; i++) {
+    if (typeof cur === "string") {
+      try {
+        cur = JSON.parse(cur);
+        continue;
+      } catch {
+        return cur;
+      }
+    }
+    if (cur && typeof cur === "object" && !Array.isArray(cur) && "value" in cur) {
+      cur = (cur as { value: unknown }).value;
+      continue;
+    }
+    return cur;
+  }
+  return cur;
 }
 
 function flashcardsKey(userId: string): string {
@@ -49,6 +75,33 @@ function flashcardItemKey(userId: string, id: string): string {
   return `keyv:user:${userId}:flashcard:${id}`;
 }
 
+type GroupChatMessage = {
+  id: string;
+  userId: string;
+  email: string;
+  text: string;
+  created: number;
+};
+
+function chatKey(groupId: string): string {
+  return `study-group-chat:${groupId}`;
+}
+
+async function loadMessages(db: D1Database, groupId: string): Promise<GroupChatMessage[]> {
+  const row = await db.prepare("SELECT value FROM kv WHERE key = ?").bind(chatKey(groupId)).first<{ value: string }>();
+  if (!row?.value) return [];
+  try {
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveMessages(db: D1Database, groupId: string, messages: GroupChatMessage[]): Promise<void> {
+  await kvSet(db, chatKey(groupId), messages.slice(-200));
+}
+
 async function kvSet(db: D1Database, key: string, value: unknown): Promise<void> {
   await db
     .prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
@@ -57,14 +110,13 @@ async function kvSet(db: D1Database, key: string, value: unknown): Promise<void>
 }
 
 async function loadFlashcards(db: D1Database, userId: string): Promise<FlashcardRecord[]> {
-  const row = await db.prepare("SELECT value FROM kv WHERE key = ?").bind(flashcardsKey(userId)).first<{ value: string }>();
-  if (!row?.value) return [];
-  try {
-    const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+  const keys = [flashcardsKey(userId), `user:${userId}:flashcards`];
+  for (const key of keys) {
+    const row = await db.prepare("SELECT value FROM kv WHERE key = ?").bind(key).first<{ value: string }>();
+    const parsed = unwrapKeyv(row?.value);
+    if (Array.isArray(parsed)) return parsed as FlashcardRecord[];
   }
+  return [];
 }
 
 async function saveFlashcards(db: D1Database, userId: string, cards: FlashcardRecord[]): Promise<void> {
@@ -224,6 +276,53 @@ async function shareSkill(env: GroupEnv, user: SessionUser, groupId: string, sou
   return json({ ok: true, itemId: id });
 }
 
+function normalizeFolder(name: string): string {
+  try {
+    return decodeURIComponent(name).trim();
+  } catch {
+    return name.trim();
+  }
+}
+
+function cardsFromUnknown(raw: unknown): Array<{ question: string; answer: string; tag: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      return {
+        question: String(row.question || row.q || "").trim(),
+        answer: String(row.answer || row.a || "").trim(),
+        tag: String(row.tag || "core"),
+      };
+    })
+    .filter((card) => card.question && card.answer)
+    .slice(0, 300);
+}
+
+async function shareDeck(env: GroupEnv, user: SessionUser, groupId: string, sourceId: string, extraCards?: unknown): Promise<Response> {
+  const folder = normalizeFolder(sourceId);
+  if (!folder || folder === "Notes") return json({ error: "folder not found" }, { status: 404 });
+  let cards = (await loadFlashcards(env.DB, user.id))
+    .filter((card) => card.tag !== "note" && cardFolder(card) === folder)
+    .map((card) => ({
+      question: String(card.question || "").trim(),
+      answer: String(card.answer || "").trim(),
+      tag: String(card.tag || "core"),
+    }))
+    .filter((card) => card.question && card.answer)
+    .slice(0, 300);
+  if (!cards.length) cards = cardsFromUnknown(extraCards);
+  if (!cards.length) return json({ error: "folder not found" }, { status: 404 });
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO study_group_items (id, group_id, kind, title, payload, r2_key, shared_by, created_at)
+     VALUES (?, ?, 'note', ?, ?, NULL, ?, ?)`
+  )
+    .bind(id, groupId, folder, JSON.stringify({ type: "deck", group: folder, cards }), user.id, Date.now())
+    .run();
+  return json({ ok: true, itemId: id });
+}
+
 async function shareNote(env: GroupEnv, user: SessionUser, groupId: string, sourceId: string): Promise<Response> {
   const cards = await loadFlashcards(env.DB, user.id);
   const card = cards.find((c) => c.id === sourceId);
@@ -309,7 +408,7 @@ async function saveItemToBag(env: GroupEnv, user: SessionUser, groupId: string, 
     return json({ ok: true, kind: "skill", id: skill.id });
   }
 
-  if (item.kind === "note") {
+  if (item.kind === "note" && !Array.isArray(payload.cards) && payload.type !== "deck") {
     const card: FlashcardRecord = {
       id: crypto.randomUUID(),
       question: String(payload.question || item.title || "Note"),
@@ -322,6 +421,40 @@ async function saveItemToBag(env: GroupEnv, user: SessionUser, groupId: string, 
     await saveFlashcards(env.DB, user.id, cards);
     await kvSet(env.DB, flashcardItemKey(user.id, card.id), card);
     return json({ ok: true, kind: "note", id: card.id });
+  }
+
+  if (item.kind === "deck" || payload.type === "deck" || Array.isArray(payload.cards)) {
+    const folder = String(payload.group || item.title || "Shared").trim() || "Shared";
+    const incoming = Array.isArray(payload.cards) ? payload.cards : [];
+    const cards = await loadFlashcards(env.DB, user.id);
+    const seen = new Set(
+      cards
+        .filter((card) => cardFolder(card) === folder)
+        .map((card) => String(card.question || "").trim().toLowerCase())
+    );
+    const added: FlashcardRecord[] = [];
+    for (const raw of incoming) {
+      const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      const question = String(row.question || "").trim();
+      const answer = String(row.answer || "").trim();
+      if (!question || !answer) continue;
+      const key = question.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const card: FlashcardRecord = {
+        id: crypto.randomUUID(),
+        question,
+        answer,
+        tag: String(row.tag || "core"),
+        group: folder,
+        created: Date.now(),
+      };
+      cards.unshift(card);
+      added.push(card);
+      await kvSet(env.DB, flashcardItemKey(user.id, card.id), card);
+    }
+    if (added.length) await saveFlashcards(env.DB, user.id, cards);
+    return json({ ok: true, kind: "deck", id: added[0]?.id || "", count: added.length, group: folder });
   }
 
   if (item.kind === "file") {
@@ -419,6 +552,7 @@ export async function handleGroupRoutes(
   if (parts.length === 1 && request.method === "DELETE") {
     if (member.role !== "owner") return json({ error: "forbidden" }, { status: 403 });
     await deletePrefix(env, groupFilesPrefix(groupId));
+    await env.DB.prepare("DELETE FROM kv WHERE key = ?").bind(chatKey(groupId)).run();
     await env.DB.prepare("DELETE FROM study_group_items WHERE group_id = ?").bind(groupId).run();
     await env.DB.prepare("DELETE FROM study_group_members WHERE group_id = ?").bind(groupId).run();
     await env.DB.prepare("DELETE FROM study_groups WHERE id = ?").bind(groupId).run();
@@ -460,14 +594,15 @@ export async function handleGroupRoutes(
   }
 
   if (parts[1] === "items" && parts.length === 2 && request.method === "POST") {
-    const body = (await request.json().catch(() => ({}))) as { kind?: string; sourceId?: string };
+    const body = (await request.json().catch(() => ({}))) as { kind?: string; sourceId?: string; cards?: unknown };
     const kind = String(body.kind || "").trim() as GroupItemKind;
     const sourceId = String(body.sourceId || "").trim();
     if (!sourceId) return json({ error: "sourceId required" }, { status: 400 });
     if (kind === "skill") return shareSkill(env, user, groupId, sourceId);
     if (kind === "file") return shareFile(env, user, groupId, sourceId);
     if (kind === "note") return shareNote(env, user, groupId, sourceId);
-    return json({ error: "kind must be skill, file, or note" }, { status: 400 });
+    if (kind === "deck") return shareDeck(env, user, groupId, sourceId, body.cards);
+    return json({ error: "kind must be skill, file, note, or deck" }, { status: 400 });
   }
 
   if (parts[1] === "items" && parts.length === 3 && request.method === "DELETE") {
@@ -485,6 +620,27 @@ export async function handleGroupRoutes(
 
   if (parts[1] === "items" && parts[3] === "save" && parts.length === 4 && request.method === "POST") {
     return saveItemToBag(env, user, groupId, parts[2]);
+  }
+
+  if (parts[1] === "messages" && parts.length === 2 && request.method === "GET") {
+    return json({ ok: true, messages: await loadMessages(env.DB, groupId) });
+  }
+
+  if (parts[1] === "messages" && parts.length === 2 && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as { text?: string };
+    const text = String(body.text || "").trim().slice(0, 2000);
+    if (!text) return json({ error: "text required" }, { status: 400 });
+    const messages = await loadMessages(env.DB, groupId);
+    const message: GroupChatMessage = {
+      id: crypto.randomUUID(),
+      userId: user.id,
+      email: user.email,
+      text,
+      created: Date.now(),
+    };
+    messages.push(message);
+    await saveMessages(env.DB, groupId, messages);
+    return json({ ok: true, message });
   }
 
   return json({ error: "not found" }, { status: 404 });

@@ -100,7 +100,7 @@ export default function Landing() {
 
         <div className="w-full md:w-fit flex">
           <div className="w-full md:w-fit md:min-w-fit p-1.5 rounded-2xl rounded-t-none bg-stone-950 flex flex-col items-start sm:items-center border border-stone-900 border-t-0 border-r-0 border-b-0 sm:border-b shadow-[inset_2px_-2px_15px] shadow-stone-900/80">
-            <div className="flex items-start justify-between md:justify-start space-x-2 p-1.5 w-full">
+            <div className="flex flex-wrap items-start justify-between md:justify-start gap-2 p-1.5 w-full min-w-0">
               <div className="relative">
                 <div
                   onClick={() => setShowMode(!showMode)}
@@ -134,12 +134,12 @@ export default function Landing() {
                 )}
               </div>
 
-              <div className="w-px h-8 mx-2 bg-white/10 rounded-full mt-2" />
+              <div className="w-px h-8 mx-2 bg-white/10 rounded-full mt-2 hidden md:block" />
 
-              <div className="p-1.5 rounded-xl hover:bg-white/5 duration-300 transition-all cursor-pointer min-w-fit h-fit hidden md:flex items-center space-x-4" onClick={onPickFile} title={stagedFile ? stagedFile.name : "Click or drop"}>
+              <div className="p-1.5 rounded-xl hover:bg-white/5 duration-300 transition-all cursor-pointer min-w-0 max-w-full h-fit hidden md:flex items-center space-x-4" onClick={onPickFile} title={stagedFile ? stagedFile.name : "Click or drop"}>
                 <div className="flex flex-col -space-y-0.5 pr-2">
                   <span className="text-xs text-stone-300">{stagedFile ? "File selected" : "Add files"}</span>
-                  <span className="text-sm font-semibold text-white">{stagedFile ? stagedFile.name : "Click or drop"}</span>
+                  <span className="text-sm font-semibold text-white truncate max-w-[12rem]">{stagedFile ? stagedFile.name : "Click or drop"}</span>
                 </div>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="size-6 text-stone-400">
                   <path
@@ -150,7 +150,7 @@ export default function Landing() {
                 </svg>
               </div>
 
-              <div className="w-px h-8 mx-2 bg-white/10 rounded-full mt-2" />
+              <div className="w-px h-8 mx-2 bg-white/10 rounded-full mt-2 hidden sm:block" />
 
               <div className="relative">
                 <div

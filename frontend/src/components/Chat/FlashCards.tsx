@@ -23,8 +23,8 @@ export default function FlashCards({ items = [], onAdd }: Props) {
             </div>
           ) : (
             items.map((c, i) => {
-              const title = c.q;
-              const content = c.a;
+              const title = typeof c.q === "string" ? c.q : String(c.q ?? "");
+              const content = typeof c.a === "string" ? c.a : String(c.a ?? "");
               return (
                 <div
                   key={`${i}-${title}`}

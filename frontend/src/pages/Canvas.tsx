@@ -244,8 +244,8 @@ export default function CanvasPage() {
   const selectedCourse = courses.find((c) => c.id === selectedCourseId) || null;
 
   return (
-    <div className="min-h-screen w-full px-4 lg:pl-28 lg:pr-4">
-      <div className="max-w-5xl mx-auto pt-6 px-4 pb-14">
+    <div className="min-h-screen w-full px-4 lg:pl-28 lg:pr-4 overflow-x-hidden">
+      <div className="max-w-5xl mx-auto pt-6 px-0 sm:px-4 pb-14 min-w-0">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <Link
@@ -454,10 +454,10 @@ export default function CanvasPage() {
                               onChange={() => toggleFile(file)}
                               className="mt-1"
                             />
-                            <div className="min-w-0 flex-1">
+                            <div className="min-w-0 flex-1 overflow-hidden">
                               <div className="text-white text-sm font-medium truncate">{file.name}</div>
                               <div className="text-stone-500 text-xs mt-1 flex flex-wrap gap-2">
-                                <span>{file.contentType}</span>
+                                <span className="truncate">{file.contentType}</span>
                                 <span>{formatBytes(file.size)}</span>
                                 {formatUpdatedAt(file.updatedAt) && <span>Updated {formatUpdatedAt(file.updatedAt)}</span>}
                                 {!file.importable && <span>Not supported for import</span>}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { env } from "../config/env";
+import { adaptiveToast } from "@cognicatch/react";
 import { chatJSON, getChatDetail, getResponseLength, type FlashCard, createFlashcard, listFlashcards, deleteFlashcard, getChats, type ChatMessage, type LibraryFile, type BagSkill, podcastStart, listLibraryFiles, clearLibraryFiles, listSkills } from "../lib/api";
 import MarkdownView from "../components/Chat/MarkdownView";
 import ActionRow from "../components/Chat/ActionRow";
@@ -12,7 +13,7 @@ import BagDrawer from "../components/Chat/BagDrawer";
 import LoadingIndicator from "../components/Chat/LoadingIndicator";
 import { useCompanion } from "../components/Companion/CompanionProvider";
 
-type BagItem = { id: string; kind: "flashcard" | "note"; title: string; content: string };
+type BagItem = { id: string; kind: "flashcard" | "note"; title: string; content: string; group?: string };
 
 function extractFirstJsonObject(s: string): string {
   let depth = 0, start = -1;
@@ -24,21 +25,44 @@ function extractFirstJsonObject(s: string): string {
   return "";
 }
 
+function asCardText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try { return JSON.stringify(value); } catch { return ""; }
+}
+
+function sanitizeCards(cards: unknown): FlashCard[] {
+  if (!Array.isArray(cards)) return [];
+  return cards.flatMap((card) => {
+    if (!card || typeof card !== "object") return [];
+    const raw = card as Record<string, unknown>;
+    const q = asCardText(raw.q ?? raw.question);
+    const a = asCardText(raw.a ?? raw.answer);
+    if (!q && !a) return [];
+    return [{
+      q,
+      a,
+      tags: Array.isArray(raw.tags) ? raw.tags.map(asCardText) : [],
+    }];
+  });
+}
+
 function normalizePayload(payload: unknown): { md: string; flashcards: FlashCard[]; topic?: string } {
   if (typeof payload === "string") {
     const s = payload.trim();
     if (s.startsWith("{") && s.endsWith("}")) {
-      try { const obj = JSON.parse(s); return { md: String(obj?.answer || ""), flashcards: Array.isArray(obj?.flashcards) ? obj.flashcards : [], topic: typeof obj?.topic === "string" ? obj.topic : undefined }; } catch { }
+      try { const obj = JSON.parse(s); return { md: String(obj?.answer || ""), flashcards: sanitizeCards(obj?.flashcards), topic: typeof obj?.topic === "string" ? obj.topic : undefined }; } catch { }
     }
     const inner = extractFirstJsonObject(s);
     if (inner) {
-      try { const obj = JSON.parse(inner); return { md: String(obj?.answer || ""), flashcards: Array.isArray(obj?.flashcards) ? obj.flashcards : [], topic: typeof obj?.topic === "string" ? obj.topic : undefined }; } catch { }
+      try { const obj = JSON.parse(inner); return { md: String(obj?.answer || ""), flashcards: sanitizeCards(obj?.flashcards), topic: typeof obj?.topic === "string" ? obj.topic : undefined }; } catch { }
     }
     return { md: s, flashcards: [] };
   }
   if (payload && typeof payload === "object") {
     const o = payload as any;
-    return { md: String(o?.answer || o?.html || ""), flashcards: Array.isArray(o?.flashcards) ? o.flashcards : [], topic: typeof o?.topic === "string" ? o.topic : undefined };
+    return { md: String(o?.answer || o?.html || ""), flashcards: sanitizeCards(o?.flashcards), topic: typeof o?.topic === "string" ? o.topic : undefined };
   }
   return { md: "", flashcards: [] };
 }
@@ -46,6 +70,34 @@ function normalizePayload(payload: unknown): { md: string; flashcards: FlashCard
 function deriveTopicFromMarkdown(md: string): string {
   const m = md.match(/^\s*#{1,6}\s+(.+?)\s*$/m);
   return m ? m[1].trim() : "";
+}
+
+const ANSWER_WAIT_MS = 180_000;
+const POLL_MS = 2500;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) =>
+    m.role === "assistant" ? { ...m, content: normalizePayload((m as any).content).md } : m
+  );
+}
+
+function lastAssistantText(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") return String(messages[i].content || "");
+  }
+  return "";
+}
+
+function isRicher(remote: ChatMessage[], local: ChatMessage[]): boolean {
+  if (!remote.length) return false;
+  if (!local.length) return true;
+  if (remote.length > local.length) return true;
+  if (remote.length < local.length) return false;
+  return lastAssistantText(remote).length > lastAssistantText(local).length;
 }
 
 export default function Chat() {
@@ -82,8 +134,64 @@ export default function Chat() {
   const seenRef = useRef<Set<string>>(new Set());
   const generatingRef = useRef(false);
   const bootRef = useRef(false);
+  const pollGenRef = useRef(0);
+  const waitingSinceRef = useRef(0);
+  const skipHydrateRef = useRef(false);
+  const seededRef = useRef(false);
   const keyFor = (kind: BagItem["kind"], title: string, content: string) =>
     `${kind}:${title.trim().toLowerCase()}|${content.trim().toLowerCase()}`;
+
+  const finishWaiting = () => {
+    generatingRef.current = false;
+    setAwaitingAnswer(false);
+    setConnecting(false);
+  };
+
+  const applyChatMessages = (raw: ChatMessage[], force = false) => {
+    const normalized = normalizeMessages(raw);
+    let applied = force;
+    setMessages((prev) => {
+      const local = Array.isArray(prev) ? prev : [];
+      if (!force && !isRicher(normalized, local)) return local;
+      applied = true;
+      return normalized;
+    });
+    if (!applied && !force) return normalized;
+    for (let i = normalized.length - 1; i >= 0; i--) {
+      if (normalized[i].role !== "assistant") continue;
+      const n = normalizePayload((raw[i] as any).content);
+      if (n.flashcards.length) setCards(n.flashcards);
+      if (n.topic) setTopic(n.topic);
+      else if (n.md) setTopic((t) => t || deriveTopicFromMarkdown(n.md));
+      break;
+    }
+    return normalized;
+  };
+
+  const pollForAnswer = async (id: string, startedAt: number) => {
+    const gen = ++pollGenRef.current;
+    const deadline = startedAt + ANSWER_WAIT_MS;
+    while (Date.now() < deadline && generatingRef.current && gen === pollGenRef.current) {
+      await sleep(POLL_MS);
+      if (!generatingRef.current || gen !== pollGenRef.current) return;
+      try {
+        const res = await getChatDetail(id);
+        if (!res?.ok || !Array.isArray(res.messages)) continue;
+        applyChatMessages(res.messages);
+        const latest = [...res.messages].reverse().find((m) => m.role === "assistant");
+        if (latest && (latest.at || 0) >= startedAt - 2000) {
+          finishWaiting();
+          return;
+        }
+      } catch {
+        // Container may still be coming back up.
+      }
+    }
+    if (generatingRef.current && gen === pollGenRef.current) {
+      finishWaiting();
+      adaptiveToast.error("Reply timed out", "The chat connection dropped. Please send your question again.");
+    }
+  };
 
   useEffect(() => {
     if (!initialChatId && !initialQuestion) {
@@ -112,7 +220,17 @@ export default function Chat() {
 
   useEffect(() => {
     const cid = search.get("chatId") || state.chatId || "";
-    setChatId(cid);
+    if (cid && cid !== chatId) {
+      setChatId(cid);
+      setMessages([]);
+      setCards([]);
+      setTopic("");
+      seededRef.current = false;
+      generatingRef.current = true;
+      setAwaitingAnswer(true);
+      setConnecting(true);
+    }
+    if (seededRef.current) return;
     if (state.answer) {
       const init = normalizePayload(state.answer);
       const seed: ChatMessage[] = [];
@@ -122,11 +240,13 @@ export default function Chat() {
       if ((init.flashcards?.length || state.flashcards?.length)) setCards(init.flashcards?.length ? init.flashcards : (state.flashcards || []));
       if (init.topic) setTopic(init.topic || "");
       else if (init.md) setTopic(deriveTopicFromMarkdown(init.md));
-    } else {
-      if (initialQuestion) {
-        setMessages((prev) => (Array.isArray(prev) && prev.length ? prev : [{ role: "user", content: initialQuestion, at: Date.now() }]));
-        setAwaitingAnswer(true);
-      }
+      seededRef.current = true;
+      return;
+    }
+    if (initialQuestion) {
+      setMessages((prev) => (Array.isArray(prev) && prev.length ? prev : [{ role: "user", content: initialQuestion, at: Date.now() }]));
+      setAwaitingAnswer(true);
+      seededRef.current = true;
     }
   }, [search, state.chatId, state.answer, state.flashcards, initialQuestion]);
 
@@ -136,97 +256,141 @@ export default function Chat() {
     generatingRef.current = true;
     setAwaitingAnswer(true);
     const length = (search.get("length") as "short" | "medium" | "long" | null) || getResponseLength();
+    const startedAt = Date.now();
+    waitingSinceRef.current = startedAt;
     chatJSON({ q: initialQuestion, length })
       .then((r) => {
         if (!r?.chatId) return;
+        skipHydrateRef.current = true;
         setChatId(r.chatId);
         navigate(`/chat?chatId=${encodeURIComponent(r.chatId)}`, {
           replace: true,
           state: { chatId: r.chatId, q: initialQuestion },
         });
+        void pollForAnswer(r.chatId, startedAt);
       })
       .catch(() => {
-        generatingRef.current = false;
-        setAwaitingAnswer(false);
-        setConnecting(false);
+        finishWaiting();
+        adaptiveToast.error("Failed to start chat", "There was a problem reaching the AI. Please try sending your prompt again.");
       });
   }, [initialChatId, initialQuestion, navigate, search]);
 
   useEffect(() => {
     if (!chatId) return;
+    if (skipHydrateRef.current) {
+      skipHydrateRef.current = false;
+      return;
+    }
     getChatDetail(chatId)
       .then((res) => {
-        if (generatingRef.current) return;
-        if (res?.ok && Array.isArray(res.messages)) {
-          const normalized = res.messages.map((m) =>
-            m.role === "assistant" ? { ...m, content: normalizePayload((m as any).content).md } : m
-          );
-          setMessages(normalized);
-          for (let i = normalized.length - 1; i >= 0; i--) {
-            const raw = (res.messages[i] as any)?.content;
-            if (normalized[i].role === "assistant") {
-              const n = normalizePayload(raw);
-              if (n.flashcards.length) setCards(n.flashcards);
-              if (n.topic) setTopic(n.topic);
-              else if (n.md) setTopic(deriveTopicFromMarkdown(n.md));
-              break;
-            }
-          }
+        const remote = res?.ok && Array.isArray(res.messages) ? res.messages : [];
+        if (remote.length) applyChatMessages(remote);
+        const latest = [...remote].reverse().find((m) => m.role === "assistant");
+        if (latest && generatingRef.current && (latest.at || 0) >= waitingSinceRef.current - 2000) {
+          finishWaiting();
+          return;
         }
+        if (!latest) {
+          generatingRef.current = true;
+          setAwaitingAnswer(true);
+          waitingSinceRef.current = waitingSinceRef.current || Date.now();
+          void pollForAnswer(chatId, waitingSinceRef.current);
+        }
+        setConnecting(false);
       })
-      .catch(() => { });
+      .catch(() => {
+        generatingRef.current = true;
+        setAwaitingAnswer(true);
+        setConnecting(false);
+      });
   }, [chatId]);
 
   useEffect(() => {
     if (!chatId) return;
+    let disposed = false;
+    let attempts = 0;
+    let retryTimer: number | undefined;
     const wsUrl = (env.backend || window.location.origin).replace(/^http/, "ws") + `/ws/chat?chatId=${encodeURIComponent(chatId)}`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onopen = () => setConnecting(false);
-    ws.onmessage = (ev) => {
-      try {
-        const m = JSON.parse(ev.data);
-        if (m?.type === "delta" && typeof m.text === "string") {
-          setAwaitingAnswer(false);
-          setConnecting(false);
-          setMessages((prev) => {
-            const arr = [...(Array.isArray(prev) ? prev : [])];
-            const last = arr[arr.length - 1];
-            if (last?.role === "assistant") {
-              arr[arr.length - 1] = { ...last, content: `${last.content}${m.text}` };
-              return arr;
-            }
-            arr.push({ role: "assistant", content: m.text, at: Date.now() });
+
+    const handleEvent = (m: any) => {
+      if (m?.type === "delta" && typeof m.text === "string") {
+        setAwaitingAnswer(false);
+        setConnecting(false);
+        setMessages((prev) => {
+          const arr = [...(Array.isArray(prev) ? prev : [])];
+          const last = arr[arr.length - 1];
+          if (last?.role === "assistant") {
+            arr[arr.length - 1] = { ...last, content: `${last.content}${m.text}` };
             return arr;
-          });
-          return;
-        }
-        if (m?.type === "answer") {
-          const norm = normalizePayload(m.answer);
-          generatingRef.current = false;
-          setMessages((prev) => {
-            const arr = [...(Array.isArray(prev) ? prev : [])];
-            const last = arr[arr.length - 1];
-            if (last?.role === "assistant") {
-              arr[arr.length - 1] = { ...last, content: norm.md || last.content };
-              return arr;
-            }
-            if (norm.md) arr.push({ role: "assistant", content: norm.md, at: Date.now() });
+          }
+          arr.push({ role: "assistant", content: m.text, at: Date.now() });
+          return arr;
+        });
+        return;
+      }
+      if (m?.type === "answer") {
+        const norm = normalizePayload(m.answer);
+        pollGenRef.current += 1;
+        finishWaiting();
+        setMessages((prev) => {
+          const arr = [...(Array.isArray(prev) ? prev : [])];
+          const last = arr[arr.length - 1];
+          if (last?.role === "assistant") {
+            arr[arr.length - 1] = { ...last, content: norm.md || last.content };
             return arr;
-          });
-          if (norm.flashcards.length) setCards(norm.flashcards);
-          if (norm.topic) setTopic(norm.topic);
-          else if (norm.md) setTopic((t) => t || deriveTopicFromMarkdown(norm.md));
-          setAwaitingAnswer(false);
-          setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 0);
+          }
+          if (norm.md) arr.push({ role: "assistant", content: norm.md, at: Date.now() });
+          return arr;
+        });
+        if (norm.flashcards.length) {
+          setCards(norm.flashcards);
+          void refreshBag();
         }
-        if (m?.type === "error") {
-          generatingRef.current = false;
-          setAwaitingAnswer(false);
-        }
-      } catch { }
+        if (norm.topic) setTopic(norm.topic);
+        else if (norm.md) setTopic((t) => t || deriveTopicFromMarkdown(norm.md));
+        setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 0);
+      }
+      if (m?.type === "error") {
+        pollGenRef.current += 1;
+        finishWaiting();
+        const errText = m.error || "The AI could not finish that reply. Please try again.";
+        setMessages((prev) => {
+          const arr = [...(Array.isArray(prev) ? prev : [])];
+          if (!arr.some((msg) => msg.role === "assistant")) {
+            arr.push({ role: "assistant", content: errText, at: Date.now() });
+          }
+          return arr;
+        });
+        adaptiveToast.error("Chat failed", errText);
+      }
     };
-    return () => { try { ws.close(); } catch { } wsRef.current = null; };
+
+    const connect = () => {
+      if (disposed) return;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        attempts = 0;
+        setConnecting(false);
+      };
+      ws.onmessage = (ev) => {
+        try { handleEvent(JSON.parse(ev.data)); } catch { }
+      };
+      ws.onclose = () => {
+        if (disposed || wsRef.current !== ws) return;
+        if (!generatingRef.current) return;
+        attempts += 1;
+        retryTimer = window.setTimeout(connect, Math.min(8000, 700 * 2 ** Math.min(attempts, 4)));
+      };
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      try { wsRef.current?.close(); } catch { }
+      wsRef.current = null;
+    };
   }, [chatId]);
 
   useEffect(() => {
@@ -291,28 +455,31 @@ export default function Chat() {
     seenRef.current.clear();
   };
 
+  const refreshBag = async () => {
+    try {
+      const [res, fileRes, skillList] = await Promise.all([
+        listFlashcards(),
+        listLibraryFiles(),
+        listSkills().catch(() => ({ skills: [] as BagSkill[] })),
+      ]);
+      const items = (res.flashcards || []).map<BagItem>((c) => ({
+        id: c.id,
+        kind: c.tag === "note" ? "note" : "flashcard",
+        title: c.question,
+        content: c.answer,
+        group: c.group,
+      }));
+      setBag(items.sort((a, b) => (a.id > b.id ? -1 : 1)));
+      setBagFiles(fileRes.files || []);
+      setBagSkills(skillList.skills || []);
+      const s = new Set<string>();
+      for (const it of items) s.add(keyFor(it.kind, it.title, it.content));
+      seenRef.current = s;
+    } catch { }
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        const [res, fileRes, skillList] = await Promise.all([
-          listFlashcards(),
-          listLibraryFiles(),
-          listSkills().catch(() => ({ skills: [] as BagSkill[] })),
-        ]);
-        const items = (res.flashcards || []).map<BagItem>((c) => ({
-          id: c.id,
-          kind: c.tag === "note" ? "note" : "flashcard",
-          title: c.question,
-          content: c.answer,
-        }));
-        setBag(items.sort((a, b) => (a.id > b.id ? -1 : 1)));
-        setBagFiles(fileRes.files || []);
-        setBagSkills(skillList.skills || []);
-        const s = new Set<string>();
-        for (const it of items) s.add(keyFor(it.kind, it.title, it.content));
-        seenRef.current = s;
-      } catch { }
-    })();
+    void refreshBag();
   }, []);
 
   const sendFollowup = async (q: string) => {
@@ -322,12 +489,19 @@ export default function Chat() {
     setAwaitingAnswer(true);
     setBusy(true);
     generatingRef.current = true;
+    const startedAt = Date.now();
+    waitingSinceRef.current = startedAt;
     try {
       const r = await chatJSON({ q: text, chatId: chatId || undefined, length: getResponseLength() });
-      if (r?.chatId && r.chatId !== chatId) setChatId(r.chatId);
+      const nextId = r?.chatId || chatId;
+      if (r?.chatId && r.chatId !== chatId) {
+        skipHydrateRef.current = true;
+        setChatId(r.chatId);
+      }
+      if (nextId) void pollForAnswer(nextId, startedAt);
     } catch {
-      generatingRef.current = false;
-      setAwaitingAnswer(false);
+      finishWaiting();
+      adaptiveToast.error("Failed to send", "There was a problem reaching the AI. Please try sending your prompt again.");
     } finally {
       setBusy(false);
       setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 0);
@@ -357,23 +531,26 @@ export default function Chat() {
   }, [chatId, latestAssistantContent, setDocument, topic]);
 
   useEffect(() => {
-    return () => setDocument(null);
+    return () => {
+      pollGenRef.current += 1;
+      setDocument(null);
+    };
   }, [setDocument]);
 
   const list = Array.isArray(messages) ? messages : [];
 
   return (
-    <div className="flex flex-col min-h-screen w-full px-4 lg:pl-28 lg:pr-4">
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-8 mt-20 lg:mt-6 mb-16">
-        <div className="flex-1 pr-6">
-          <div className="w-full max-w-5xl mx-auto p-4 pt-2 pb-28">
-            <div className="space-y-6">
+    <div className="flex flex-col min-h-screen w-full max-w-[100vw] overflow-x-hidden px-2 md:px-4 lg:pl-28 lg:pr-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:gap-8 mt-6 md:mt-20 lg:mt-6 mb-16">
+        <div className="min-w-0 flex-1 lg:pr-6">
+          <div className="w-full max-w-5xl mx-auto px-0 md:p-4 pt-2 pb-28">
+            <div className="space-y-4 md:space-y-6">
               {list.map((m, i) => {
-                const userBubble = "inline-block max-w-[85%] bg-stone-900/70 border border-zinc-800 rounded-2xl px-4 py-3";
+                const userBubble = "inline-block max-w-[92%] md:max-w-[85%] bg-stone-900/70 border border-zinc-800 rounded-2xl px-3 py-2.5 md:px-4 md:py-3";
                 if (m.role === "assistant") {
                   return (
                     <div key={i} className="w-full flex justify-start">
-                      <div className="w-full mx-auto rounded-3xl bg-stone-950/90 border border-zinc-900 shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-1 ring-black/10 backdrop-blur px-6 md:px-8 py-6 md:py-8 max-w-[min(100%,1000px)]">
+                      <div className="w-full mx-auto rounded-2xl md:rounded-3xl bg-stone-950/90 border border-zinc-900 shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-1 ring-black/10 backdrop-blur px-3 py-4 md:px-8 md:py-8 max-w-[min(100%,1000px)]">
                         <div className="animate-[fadeIn_300ms_ease-out] leading-7 md:leading-8">
                           <MarkdownView md={m.content} />
                         </div>
@@ -389,9 +566,9 @@ export default function Chat() {
                   </div>
                 );
               })}
-              {(connecting || awaitingAnswer) && (
+              {((connecting && !list.length) || awaitingAnswer) && (
                 <div className="w-full flex justify-start">
-                  <LoadingIndicator label={connecting ? "Connecting…" : "Thinking…"} />
+                  <LoadingIndicator label={connecting && !list.length ? "Connecting…" : "Thinking…"} />
                 </div>
               )}
               <div ref={scrollRef} />
@@ -431,7 +608,9 @@ export default function Chat() {
       />
 
       <Composer disabled={busy} onSend={sendFollowup} />
-      <BagFab count={bag.length + bagFiles.length} onClick={() => setBagOpen(true)} />
+      <div className="hidden md:block">
+        <BagFab count={bag.length + bagFiles.length} onClick={() => setBagOpen(true)} />
+      </div>
       <BagDrawer
         open={bagOpen}
         items={bag}
@@ -443,7 +622,7 @@ export default function Chat() {
           setBagOpen(false);
           if (file.chatId) navigate(`/chat?chatId=${encodeURIComponent(file.chatId)}`);
         }}
-        onSkillChatStarted={(chatId) => navigate(`/chat?chatId=${encodeURIComponent(chatId)}`)}
+        onSkillChatStarted={(chatId, prompt) => navigate(`/chat?chatId=${encodeURIComponent(chatId)}&q=${encodeURIComponent(prompt || "Running skill")}`)}
       />
     </div>
   );

@@ -35,7 +35,7 @@ notes: chapters 6-7`
             dueAt: parsed.dueAt || fallback.dueAt,
             estMins: parsed.estMins ? parseInt(parsed.estMins) : fallback.estMins,
             course: parsed.course || fallback.course,
-            type: parsed.type as TaskType || fallback.type,
+            type: (parsed.type as TaskType) || fallback.type,
             priority: parsed.priority ? parseInt(parsed.priority) as 1 | 2 | 3 | 4 | 5 : fallback.priority,
             notes: parsed.notes || fallback.notes
         }
@@ -65,10 +65,11 @@ function heuristicParse(text: string): Partial<Task> {
         title: text.trim(),
         priority: 3,
         estMins: 60,
-        dueAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // Default to 1 week from now
     }
 
     const datePatterns = [
+        /(?:due\s+)?in\s+(\d+)\s+weeks?/i,
+        /(?:due\s+)?in\s+(\d+)\s+days?/i,
         /due\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
         /due\s+(mon|tue|wed|thu|fri|sat|sun)/i,
         /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
@@ -84,7 +85,14 @@ function heuristicParse(text: string): Partial<Task> {
     for (const pattern of datePatterns) {
         const match = text.match(pattern)
         if (match) {
-            result.dueAt = parseDateHeuristic(match[1])
+            const raw = match[1] || match[0]
+            if (/in\s+\d+\s+weeks?/i.test(match[0])) {
+                result.dueAt = parseRelativeWeeks(parseInt(match[1], 10))
+            } else if (/in\s+\d+\s+days?/i.test(match[0])) {
+                result.dueAt = parseRelativeDays(parseInt(match[1], 10))
+            } else {
+                result.dueAt = parseDateHeuristic(raw)
+            }
             break
         }
     }
@@ -120,6 +128,8 @@ function heuristicParse(text: string): Partial<Task> {
         result.type = 'lab' as TaskType
     } else if (text.toLowerCase().includes('exam') || text.toLowerCase().includes('test')) {
         result.type = 'exam' as TaskType
+    } else if (text.toLowerCase().includes('review')) {
+        result.type = 'review' as TaskType
     }
 
     if (result.dueAt) {
@@ -131,6 +141,17 @@ function heuristicParse(text: string): Partial<Task> {
     }
 
     return result
+}
+
+function parseRelativeDays(days: number): string {
+    const today = new Date()
+    today.setHours(23, 59, 0, 0)
+    today.setDate(today.getDate() + Math.max(0, days))
+    return today.toISOString()
+}
+
+function parseRelativeWeeks(weeks: number): string {
+    return parseRelativeDays(Math.max(0, weeks) * 7)
 }
 
 function parseDateHeuristic(dateStr: string): string {
@@ -192,7 +213,7 @@ function parseDateHeuristic(dateStr: string): string {
         return targetDate.toISOString()
     }
 
-    return new Date(today.getTime() + 47 * 60 * 60 * 1000).toISOString()
+    return parseRelativeDays(1)
 }
 
 export async function generateSteps(task: Task): Promise<string[]> {
@@ -246,14 +267,17 @@ function getDefaultSteps(type?: TaskType): string[] {
             return ['Read manual', 'Set up', 'Collect data', 'Analyze', 'Report']
         case 'exam':
             return ['Review syllabus', 'Study notes', 'Practice', 'Self-test']
+        case 'review':
+            return ['Gather materials', 'Review key points', 'Self-quiz', 'Note gaps']
         default:
             return ['Start task', 'Work on it', 'Review', 'Complete']
     }
 }
 
 export function calculateUrgencyScore(task: Task): number {
+    const dueTime = Date.parse(String(task.dueAt || ""))
+    if (!Number.isFinite(dueTime)) return (task.priority || 3) / 5
     const now = new Date().getTime()
-    const dueTime = new Date(task.dueAt).getTime()
     const timeToDeadline = Math.max(1, dueTime - now) / (1000 * 60 * 60)
 
     const W_URGENCY = 0.5
@@ -288,6 +312,7 @@ export function makeSlots(tasks: Task[], policy: PlanPolicy): Slot[] {
 function generateTaskSlots(task: Task, policy: PlanPolicy, startTime: Date, existingSlots: Slot[]): Slot[] {
     const slots: Slot[] = []
     const dueDate = new Date(task.dueAt)
+    if (Number.isNaN(dueDate.getTime())) return slots
     const remainingMins = task.estMins
 
     const sessionMins = policy.pomodoroMins

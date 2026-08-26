@@ -76,7 +76,53 @@ export async function putUserUpload(
   };
 }
 
-export async function listUserUploads(env: FileEnv, userId: string): Promise<BagFile[]> {
+function unwrapKeyv(raw: unknown): unknown {
+  let cur = raw;
+  for (let i = 0; i < 5; i++) {
+    if (typeof cur === "string") {
+      try {
+        cur = JSON.parse(cur);
+        continue;
+      } catch {
+        return cur;
+      }
+    }
+    if (cur && typeof cur === "object" && !Array.isArray(cur) && "value" in cur) {
+      cur = (cur as { value: unknown }).value;
+      continue;
+    }
+    return cur;
+  }
+  return cur;
+}
+
+async function loadLibraryIndex(db: D1Database, userId: string): Promise<BagFile[]> {
+  const keys = [`keyv:user:${userId}:library-files`, `user:${userId}:library-files`];
+  for (const key of keys) {
+    const row = await db.prepare("SELECT value FROM kv WHERE key = ?").bind(key).first<{ value: string }>();
+    const parsed = unwrapKeyv(row?.value);
+    if (!Array.isArray(parsed)) continue;
+    return parsed
+      .map((item) => {
+        const file = item as Partial<BagFile>;
+        const filename = String(file.filename || "").trim();
+        if (!filename) return null;
+        return {
+          id: String(file.id || filename),
+          filename,
+          mimeType: String(file.mimeType || guessMime(filename)),
+          size: Number(file.size || 0),
+          chatId: String(file.chatId || ""),
+          source: file.source === "canvas" ? "canvas" : "upload",
+          created: Number(file.created || Date.now()),
+        } satisfies BagFile;
+      })
+      .filter((file): file is BagFile => Boolean(file));
+  }
+  return [];
+}
+
+async function listR2Uploads(env: FileEnv, userId: string): Promise<BagFile[]> {
   const prefix = userUploadsPrefix(userId);
   const files: BagFile[] = [];
   let cursor: string | undefined;
@@ -98,20 +144,53 @@ export async function listUserUploads(env: FileEnv, userId: string): Promise<Bag
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  files.sort((a, b) => b.created - a.created);
-  const seen = new Set<string>();
-  return files.filter((file) => {
-    const name = file.filename.toLowerCase();
-    if (seen.has(name)) return false;
-    seen.add(name);
-    return true;
-  });
+  return files;
 }
 
-function assertOwnKey(userId: string, key: string): string | null {
-  const clean = decodeURIComponent(key);
-  if (clean.includes("..") || !clean.startsWith(userUploadsPrefix(userId))) return null;
-  return clean;
+export async function listUserUploads(env: FileEnv, userId: string): Promise<BagFile[]> {
+  const [fromR2, fromIndex] = await Promise.all([
+    listR2Uploads(env, userId),
+    loadLibraryIndex(env.DB, userId),
+  ]);
+  const byName = new Map<string, BagFile>();
+  for (const file of fromIndex) byName.set(file.filename.toLowerCase(), file);
+  for (const file of fromR2) {
+    const name = file.filename.toLowerCase();
+    const prev = byName.get(name);
+    byName.set(name, prev ? { ...prev, ...file, chatId: file.chatId || prev.chatId } : file);
+  }
+  return [...byName.values()].sort((a, b) => b.created - a.created);
+}
+
+function candidateKeys(userId: string, rawKey: string): string[] {
+  const clean = decodeURIComponent(rawKey).replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!clean || clean.includes("..")) return [];
+  const prefix = userUploadsPrefix(userId);
+  const keys: string[] = [];
+  if (clean.startsWith(prefix) || clean.startsWith(`users/${userId}/`)) keys.push(clean);
+  if (clean.startsWith("uploads/")) {
+    keys.push(`${prefix}${clean.slice("uploads/".length)}`);
+    keys.push(`users/${userId}/${clean}`);
+    keys.push(clean);
+  }
+  if (!clean.includes("/")) keys.push(`${prefix}${clean}`);
+  return [...new Set(keys)];
+}
+
+async function resolveOwnedKey(env: FileEnv, userId: string, rawKey: string): Promise<string | null> {
+  const wanted = decodeURIComponent(rawKey || "");
+  const files = await listUserUploads(env, userId);
+  const match = files.find((file) => file.id === wanted || file.id.endsWith(`/${wanted}`) || file.filename === wanted);
+  const tryKeys = [
+    ...candidateKeys(userId, rawKey),
+    ...(match ? candidateKeys(userId, match.id) : []),
+    ...(match?.id && !match.id.includes("..") ? [match.id] : []),
+  ];
+  for (const key of [...new Set(tryKeys)]) {
+    const obj = await env.STORAGE.head(key);
+    if (obj) return key;
+  }
+  return null;
 }
 
 export async function handleFileLibraryRoutes(
@@ -142,7 +221,7 @@ export async function handleFileLibraryRoutes(
   }
 
   if (pathname === "/api/files/object" || pathname === "/files/object") {
-    const key = assertOwnKey(user.id, url.searchParams.get("key") || "");
+    const key = await resolveOwnedKey(env, user.id, url.searchParams.get("key") || "");
     if (!key) return json({ error: "not found" }, { status: 404 });
     if (request.method === "DELETE") {
       await env.STORAGE.delete(key);

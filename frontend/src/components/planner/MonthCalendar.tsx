@@ -1,13 +1,15 @@
 import { useMemo, useState, type DragEvent } from "react"
-import { type PlannerTask } from "../../lib/api"
+import { type PlannerRecurrence, type PlannerTask } from "../../lib/api"
 import { dateKeyFromDue, dueMs, formatTime, localDateKey, monthGrid, WEEKDAY_LABELS } from "./date"
+import { recurrenceLabel } from "./recurrence"
 
 type Props = {
     tasks: PlannerTask[]
     onMoveDue: (id: string, dueAt: string) => Promise<void> | void
+    onUpdateRecurrence?: (id: string, recurrence: PlannerRecurrence | null) => Promise<void> | void
 }
 
-export default function MonthCalendar({ tasks, onMoveDue }: Props) {
+export default function MonthCalendar({ tasks, onMoveDue, onUpdateRecurrence }: Props) {
     const now = new Date()
     const [cursor, setCursor] = useState({ year: now.getFullYear(), month: now.getMonth() })
     const [overDay, setOverDay] = useState<string | null>(null)
@@ -154,7 +156,12 @@ export default function MonthCalendar({ tasks, onMoveDue }: Props) {
                                         title={task.title}
                                         className={`rounded px-1.5 py-1 bg-stone-900 border border-zinc-800 cursor-grab active:cursor-grabbing ${moving === task.id ? "opacity-50" : ""}`}
                                     >
-                                        <div className="text-[11px] text-stone-100 truncate">{task.title}</div>
+                                        <div className="flex items-center gap-1 min-w-0">
+                                            <div className="text-[11px] text-stone-100 truncate">{task.title}</div>
+                                            {task.recurrence?.freq && (
+                                                <span className="shrink-0 text-[9px] text-sky-300" title={recurrenceLabel(task.recurrence.freq)}>↻</span>
+                                            )}
+                                        </div>
                                         <div className="text-[10px] text-stone-500">{formatTime(task.dueAt)}</div>
                                     </div>
                                 ))}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { chatJSON } from "../../lib/api";
+import { startChat } from "../../lib/api";
 
 const PROMPTS = [
   "Teach me a lesson on Quadratic Equations. Assume I absolutely know nothing.",
@@ -84,7 +84,7 @@ export default function PromptRail({ onSend }: { onSend?: (prompt: string) => vo
     }
     try {
       setBusy(true);
-      const r = await chatJSON({ q });
+      const r = await startChat({ q });
       const cid = r?.chatId || "";
       navigate(`/chat?chatId=${encodeURIComponent(cid)}&q=${encodeURIComponent(q)}`, {
         state: { chatId: cid, q },

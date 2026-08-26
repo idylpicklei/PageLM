@@ -42,6 +42,21 @@ export function hasLocalDocuments(collection: string): boolean {
   return existsStorageSync(`json/${collection}.json`)
 }
 
+export async function readNamespaceText(collection: string, maxChars = 28000): Promise<string> {
+  const rel = `json/${collection}.json`
+  try {
+    const raw = JSON.parse((await readStorage(rel, "utf-8")) as string)
+    if (!Array.isArray(raw)) return ""
+    const text = raw
+      .map((d: any) => (typeof d?.pageContent === "string" ? d.pageContent : ""))
+      .filter(Boolean)
+      .join("\n\n")
+    return text.slice(0, maxChars)
+  } catch {
+    return ""
+  }
+}
+
 export async function getRetriever(
   collection: string,
   embeddings: EmbeddingsInterface
