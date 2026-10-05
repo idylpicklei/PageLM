@@ -132,23 +132,39 @@ function uniqueInOrder(tokens: readonly string[]): string[] {
   return unique;
 }
 
+type GroupToken =
+  | { readonly kind: "absent" }
+  | { readonly kind: "all" }
+  | { readonly kind: "notes" }
+  | { readonly kind: "folder"; readonly name: FolderName };
+
+function classifyGroupToken(token: string): GroupToken {
+  if (token === "") return { kind: "absent" };
+  if (token === ALL_TOKEN) return { kind: "all" };
+  if (token === NOTES_LABEL) return { kind: "notes" };
+  const name = folderName(token);
+  if (!name) return { kind: "absent" };
+  return { kind: "folder", name };
+}
+
 export function parsePersonalStudy(params: URLSearchParams): PersonalStudyParse {
-  // "" is an absent group. A whitespace-only token is a folder name, not all.
-  const unique = uniqueInOrder(params.getAll("group").filter((token) => token !== ""));
+  const tokens = uniqueInOrder(params.getAll("group")).map(classifyGroupToken);
+  const present = tokens.filter((token) => token.kind !== "absent");
   const dueOnly = params.get("due") === "1";
-  const hasAll = unique.includes(ALL_TOKEN);
-  if (hasAll && unique.length > 1) {
+  const hasAll = present.some((token) => token.kind === "all");
+  if (hasAll && present.length > 1) {
     return { status: "invalid", message: "That study link mixes all folders with a named folder." };
   }
-  if (hasAll || unique.length === 0) return { status: "ok", launch: launch(allScope(), dueOnly) };
-  if (unique.includes(NOTES_LABEL)) {
+  if (hasAll || present.length === 0) return { status: "ok", launch: launch(allScope(), dueOnly) };
+  if (present.some((token) => token.kind === "notes")) {
     return { status: "invalid", message: "Notes are not part of flashcard review." };
   }
   const folders: FolderName[] = [];
-  for (const token of unique) {
-    const folder = folderName(token);
-    if (!folder) return { status: "invalid", message: "That study link has an unusable folder." };
-    folders.push(folder);
+  for (const token of present) {
+    if (token.kind !== "folder") {
+      return { status: "invalid", message: "That study link has an unusable folder." };
+    }
+    folders.push(token.name);
   }
   const scope = folderScope(folders);
   if (!scope) return { status: "invalid", message: "That study link has an unusable folder." };
