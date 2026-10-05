@@ -183,6 +183,48 @@ describe("cardsForScope and cardsForSession", () => {
   });
 });
 
+describe("bag journey", () => {
+  it("blocks an empty bag, then keeps non-blank Biology and Chemistry cards", () => {
+    expect(scopeFromChecks(emptyChecks())).toBeNull();
+
+    const biology = mustFolder("Biology");
+    const chemistry = mustFolder("Chemistry");
+    const selected = scopeFromChecks(toggleCheck(toggleCheck(emptyChecks(), biology), chemistry));
+    expect(selected).toEqual({ kind: "folders", folders: ["Biology", "Chemistry"] });
+    if (selected === null) {
+      throw new Error("Study stayed blocked after Biology and Chemistry were checked");
+    }
+
+    const path = studyPath(launch(selected));
+    expect(path).toBe("/study?group=Biology&group=Chemistry");
+
+    const parsed = parsePersonalStudy(new URL(path, "http://pagelm.local").searchParams);
+    expect(parsed).toEqual({
+      status: "ok",
+      launch: {
+        scope: { kind: "folders", folders: ["Biology", "Chemistry"] },
+        dueOnly: false,
+      },
+    });
+    if (parsed.status !== "ok") {
+      throw new Error(parsed.message);
+    }
+
+    const cards = [
+      { group: "Biology", tag: "core", question: "mito", answer: "power" },
+      { group: "Chemistry", tag: "core", question: "h2o", answer: "water" },
+      { group: "History", tag: "core", question: "year", answer: "1066" },
+      { group: "Biology", tag: "core", question: "   ", answer: "blank side" },
+    ];
+    expect(
+      cardsForSession(cards, parsed.launch, () => true).map((card) => [card.group, card.question, card.answer]),
+    ).toEqual([
+      ["Biology", "mito", "power"],
+      ["Chemistry", "h2o", "water"],
+    ]);
+  });
+});
+
 describe("session copy", () => {
   it("uses the all-scope subtitles, a due marker, and the empty-session lines", () => {
     expect(scopeLabel(allScope(), false)).toBe("All flashcards");
