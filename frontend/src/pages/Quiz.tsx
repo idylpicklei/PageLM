@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { quizStart, connectQuizStream, getSharedDeck, listFlashcards, type QuizEvent, type SavedFlashcard } from "../lib/api";
+import { allScope, folderName, launch, oneFolder, studyPath } from "../lib/studyScope";
 import LoadingIndicator from "../components/Chat/LoadingIndicator";
 import TopicBar from "../components/Quiz/TopicBar";
 import QuizHeader from "../components/Quiz/QuizHeader";
@@ -274,7 +275,7 @@ export default function Quiz() {
                 {bagGroups.length > 1 && (
                   <div className="flex shrink-0 gap-2">
                     <Link
-                      to="/study?group=__all__"
+                      to={studyPath(launch(allScope()))}
                       className="rounded-full border border-orange-800/70 px-4 py-2 text-sm text-orange-200 hover:bg-orange-900/30"
                     >
                       Study all
@@ -294,7 +295,9 @@ export default function Quiz() {
               )}
               {bagGroups.length ? (
                 <div className="space-y-2">
-                  {bagGroups.map(([name, cards]) => (
+                  {bagGroups.map(([name, cards]) => {
+                    const folder = folderName(name);
+                    return (
                     <div
                       key={name}
                       className="w-full flex items-center gap-3 rounded-2xl border border-zinc-800 bg-stone-950 px-4 py-3"
@@ -306,12 +309,14 @@ export default function Quiz() {
                         <div className="text-white font-medium truncate">{name}</div>
                         <div className="text-xs text-stone-500">{cards.length} card{cards.length === 1 ? "" : "s"}</div>
                       </div>
-                      <Link
-                        to={`/study?group=${encodeURIComponent(name)}`}
-                        className="shrink-0 rounded-lg border border-orange-800/70 px-3 py-1.5 text-sm text-orange-200 hover:bg-orange-900/30"
-                      >
-                        Study
-                      </Link>
+                      {folder && (
+                        <Link
+                          to={studyPath(launch(oneFolder(folder)))}
+                          className="shrink-0 rounded-lg border border-orange-800/70 px-3 py-1.5 text-sm text-orange-200 hover:bg-orange-900/30"
+                        >
+                          Study
+                        </Link>
+                      )}
                       <button
                         type="button"
                         onClick={() => startFromCards(name)}
@@ -320,7 +325,8 @@ export default function Quiz() {
                         Quiz
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-zinc-800 px-4 py-8 text-center text-stone-400 text-sm">

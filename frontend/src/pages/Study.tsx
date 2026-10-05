@@ -8,6 +8,16 @@ import {
   reviewFlashcard,
   type SavedFlashcard,
 } from "../lib/api";
+import {
+  cardsForScope,
+  cardsForSession,
+  parsePersonalStudy,
+  scopeDueMarker,
+  scopeFolderNames,
+  scopeLabel,
+  sessionEmptyMessage,
+  type StudyLaunch,
+} from "../lib/studyScope";
 
 function shuffle<T>(items: T[]): T[] {
   const next = [...items];
@@ -18,15 +28,47 @@ function shuffle<T>(items: T[]): T[] {
   return next;
 }
 
-function groupName(card: SavedFlashcard): string {
-  if (card.tag === "note") return "Notes";
-  return card.group || "Ungrouped";
-}
-
-function asCardText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value == null) return "";
-  return String(value);
+function PersonalSubtitle({ launch }: { launch: StudyLaunch }) {
+  switch (launch.scope.kind) {
+    case "all":
+      return (
+        <p className="text-sm text-stone-500 truncate max-w-[16rem] sm:max-w-md">
+          {scopeLabel(launch.scope, launch.dueOnly)}
+        </p>
+      );
+    case "folders": {
+      const names = scopeFolderNames(launch.scope);
+      if (names.length === 1) {
+        return (
+          <p className="text-sm text-stone-500 truncate max-w-[16rem] sm:max-w-md">
+            {scopeLabel(launch.scope, launch.dueOnly)}
+          </p>
+        );
+      }
+      const due = scopeDueMarker(launch.dueOnly);
+      return (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {names.map((name) => (
+            <span
+              key={name}
+              className="inline-flex max-w-full items-center break-words rounded-md border border-orange-800/70 bg-stone-950 px-2.5 py-0.5 text-xs text-orange-200"
+            >
+              {name}
+            </span>
+          ))}
+          {due ? (
+            <span className="inline-flex items-center rounded-md border border-orange-500/50 bg-orange-600/20 px-2.5 py-0.5 text-xs text-orange-100">
+              {due}
+            </span>
+          ) : null}
+        </div>
+      );
+    }
+    default: {
+      const unreachable: never = launch.scope;
+      return unreachable;
+    }
+  }
 }
 
 function orderForStudy(cards: SavedFlashcard[]): SavedFlashcard[] {
@@ -38,11 +80,11 @@ function orderForStudy(cards: SavedFlashcard[]): SavedFlashcard[] {
 export default function Study() {
   const [search] = useSearchParams();
   const navigate = useNavigate();
-  const requested = search.get("group") || "";
-  const dueOnly = search.get("due") === "1";
   const sharedGroup = search.get("sharedGroup") || "";
   const sharedItem = search.get("item") || "";
   const isShared = Boolean(sharedGroup && sharedItem);
+  const query = search.toString();
+  const personal = parsePersonalStudy(search);
 
   const [queue, setQueue] = useState<SavedFlashcard[]>([]);
   const [allInScope, setAllInScope] = useState<SavedFlashcard[]>([]);
@@ -68,47 +110,31 @@ export default function Study() {
       setDueTomorrow(0);
     };
 
-    const load = isShared
-      ? getSharedDeck(sharedGroup, sharedItem).then((deck) =>
-          reset(deck.cards, "That shared folder has no flashcards.")
-        )
-      : listFlashcards().then((res) => {
-          const all = (res.flashcards || [])
-            .filter((c) => {
-              const question = asCardText(c.question).trim();
-              const answer = asCardText(c.answer).trim();
-              return c.tag !== "note" && question && answer;
-            })
-            .map((c) => ({
-              ...c,
-              question: asCardText(c.question),
-              answer: asCardText(c.answer),
-            }));
-          let filtered =
-            requested === "__all__" || !requested
-              ? all
-              : all.filter((c) => groupName(c) === requested);
-          if (dueOnly) filtered = filtered.filter((c) => isFlashcardDue(c));
-          reset(filtered, dueOnly ? "No cards due for review." : "No flashcards in that group.");
-        });
+    if (isShared) {
+      getSharedDeck(sharedGroup, sharedItem)
+        .then((deck) => reset(deck.cards, "That shared folder has no flashcards."))
+        .catch(() => setError("Could not load that shared folder."))
+        .finally(() => setLoading(false));
+      return;
+    }
 
-    load
-      .catch(() =>
-        setError(isShared ? "Could not load that shared folder." : "Could not load your flashcards.")
-      )
+    const parsed = parsePersonalStudy(new URLSearchParams(query));
+    if (parsed.status === "invalid") {
+      reset([], parsed.message);
+      setLoading(false);
+      return;
+    }
+
+    const session = parsed.launch;
+    listFlashcards()
+      .then((res) => {
+        reset(cardsForSession(res.flashcards || [], session, isFlashcardDue), sessionEmptyMessage(session));
+      })
+      .catch(() => setError("Could not load your flashcards."))
       .finally(() => setLoading(false));
-  }, [requested, dueOnly, sharedGroup, sharedItem, isShared]);
+  }, [query, sharedGroup, sharedItem, isShared]);
 
   const card = queue[0];
-  const title = isShared
-    ? (allInScope[0]?.group || "Shared folder")
-    : dueOnly
-      ? requested === "__all__" || !requested
-        ? "Due for review"
-        : `${requested} · due`
-      : requested === "__all__" || !requested
-        ? "All flashcards"
-        : requested;
   const totalStarted = allInScope.length;
   const remaining = queue.length;
   const studied = totalStarted - remaining + (done ? 0 : card ? 1 : 0);
@@ -119,18 +145,14 @@ export default function Study() {
 
   const finish = async () => {
     setDone(true);
-    if (!isShared) {
-      try {
-        const res = await listFlashcards();
-        const all = (res.flashcards || []).filter((c) => c.tag !== "note");
-        const scoped =
-          requested === "__all__" || !requested
-            ? all
-            : all.filter((c) => groupName(c) === requested);
-        setDueTomorrow(countDueTomorrow(scoped));
-      } catch {
-        setDueTomorrow(0);
-      }
+    if (isShared) return;
+    const parsed = parsePersonalStudy(search);
+    if (parsed.status !== "ok") return;
+    try {
+      const res = await listFlashcards();
+      setDueTomorrow(countDueTomorrow(cardsForScope(res.flashcards || [], parsed.launch.scope)));
+    } catch {
+      setDueTomorrow(0);
     }
   };
 
@@ -178,23 +200,29 @@ export default function Study() {
     <div className="flex flex-col min-h-screen w-full px-4 lg:pl-28 lg:pr-4">
       <div className="w-full max-w-3xl mx-auto p-4 pt-8 pb-24 my-auto">
         <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <button
               type="button"
               onClick={() => navigate(-1)}
-              className="p-2 rounded-xl bg-stone-950 border border-zinc-800 hover:bg-stone-900"
+              className="shrink-0 p-2 rounded-xl bg-stone-950 border border-zinc-800 hover:bg-stone-900"
               aria-label="Back"
             >
               <svg viewBox="0 0 24 24" className="size-5 text-stone-300" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
               </svg>
             </button>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-2xl font-semibold text-white">Study</h1>
-              <p className="text-sm text-stone-500 truncate max-w-[16rem] sm:max-w-md">{title}</p>
+              {isShared ? (
+                <p className="text-sm text-stone-500 truncate max-w-[16rem] sm:max-w-md">
+                  {allInScope[0]?.group || "Shared folder"}
+                </p>
+              ) : personal.status === "ok" ? (
+                <PersonalSubtitle launch={personal.launch} />
+              ) : null}
             </div>
           </div>
-          <Link to="/cards" className="text-sm text-orange-300 hover:text-orange-200">
+          <Link to="/cards" className="shrink-0 text-sm text-orange-300 hover:text-orange-200">
             My bag
           </Link>
         </div>
