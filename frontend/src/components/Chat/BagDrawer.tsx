@@ -10,6 +10,7 @@ import {
   type LibraryFile,
   type StudyGroupSummary,
 } from "../../lib/api";
+import { folderName, launch, oneFolder, studyPath } from "../../lib/studyScope";
 import { PickBagFileModal, PickStudyGroupModal } from "../LearningBag/BagPickers";
 
 type Item = { id: string; kind: "flashcard" | "note"; title: string; content: string; group?: string };
@@ -125,7 +126,9 @@ export default function BagDrawer({
                         const name = item.kind === "note" ? "Notes" : (item.group || "Ungrouped");
                         (acc[name] ||= []).push(item);
                         return acc;
-                      }, {})).map(([name, cards]) => (
+                      }, {})).map(([name, cards]) => {
+                        const folder = folderName(name);
+                        return (
                         <details key={name} className="rounded-xl border border-stone-800 bg-stone-900/40 overflow-hidden">
                           <summary className="cursor-pointer list-none px-3 py-2.5 flex flex-wrap items-center gap-2 hover:bg-stone-900/70">
                             <svg viewBox="0 0 24 24" className="size-4 shrink-0 text-orange-300" fill="currentColor">
@@ -137,18 +140,20 @@ export default function BagDrawer({
                             </div>
                             {name !== "Notes" && (
                               <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    onClose();
-                                    navigate(`/study?group=${encodeURIComponent(name)}`);
-                                  }}
-                                  className="rounded-md border border-orange-800/70 px-2 py-1 text-[11px] text-orange-200 hover:bg-orange-900/30"
-                                >
-                                  Study
-                                </button>
+                                {folder && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      onClose();
+                                      navigate(studyPath(launch(oneFolder(folder))));
+                                    }}
+                                    className="rounded-md border border-orange-800/70 px-2 py-1 text-[11px] text-orange-200 hover:bg-orange-900/30"
+                                  >
+                                    Study
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -176,7 +181,8 @@ export default function BagDrawer({
                             ))}
                           </div>
                         </details>
-                      ))}
+                        );
+                      })}
                     </div>
                   </section>
                 )}
