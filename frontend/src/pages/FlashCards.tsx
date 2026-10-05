@@ -256,7 +256,8 @@ export default function FlashCards() {
     const folder = folderName(name);
     return folder ? [folder] : [];
   });
-  const selectedScope = scopeFromChecks(retainChecks(checks, reviewableFolders));
+  const activeChecks = retainChecks(checks, reviewableFolders);
+  const selectedScope = scopeFromChecks(activeChecks);
 
   const flashcardItems = items.filter((item) => item.tag !== "note");
   const totalDue = countDueFlashcards(flashcardItems);
@@ -355,8 +356,8 @@ export default function FlashCards() {
                         <label className="flex shrink-0 items-center pl-3">
                           <input
                             type="checkbox"
-                            checked={checks.has(folder)}
-                            onChange={() => setChecks((current) => toggleCheck(current, folder))}
+                            checked={activeChecks.has(folder)}
+                            onChange={() => setChecks((current) => toggleCheck(retainChecks(current, reviewableFolders), folder))}
                             aria-label={`Select ${name}`}
                             className="size-4 accent-orange-400"
                           />

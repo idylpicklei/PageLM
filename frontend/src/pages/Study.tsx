@@ -37,19 +37,27 @@ function PersonalSubtitle({ launch }: { launch: StudyLaunch }) {
         </p>
       );
     case "folders": {
+      const names = scopeFolderNames(launch.scope);
+      if (names.length === 1) {
+        return (
+          <p className="text-sm text-stone-500 truncate max-w-[16rem] sm:max-w-md">
+            {scopeLabel(launch.scope, launch.dueOnly)}
+          </p>
+        );
+      }
       const due = scopeDueMarker(launch.dueOnly);
       return (
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          {scopeFolderNames(launch.scope).map((name) => (
+          {names.map((name) => (
             <span
               key={name}
-              className="inline-flex max-w-full items-center break-words rounded-full border border-orange-800/70 bg-stone-950 px-2.5 py-0.5 text-xs text-orange-200"
+              className="inline-flex max-w-full items-center break-words rounded-md border border-orange-800/70 bg-stone-950 px-2.5 py-0.5 text-xs text-orange-200"
             >
               {name}
             </span>
           ))}
           {due ? (
-            <span className="inline-flex items-center rounded-full border border-orange-500/50 bg-orange-600/20 px-2.5 py-0.5 text-xs text-orange-100">
+            <span className="inline-flex items-center rounded-md border border-orange-500/50 bg-orange-600/20 px-2.5 py-0.5 text-xs text-orange-100">
               {due}
             </span>
           ) : null}
