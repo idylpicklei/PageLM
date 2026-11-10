@@ -22,6 +22,19 @@ import {
   type SavedFlashcard,
   type StudyGroupSummary,
 } from "../lib/api";
+import {
+  allScope,
+  compareFolderLabels,
+  emptyChecks,
+  folderLabel,
+  folderName,
+  launch,
+  oneFolder,
+  retainChecks,
+  scopeFromChecks,
+  studyPath,
+  toggleCheck,
+} from "../lib/studyScope";
 import { useNavigate } from "react-router-dom";
 import { PickBagFileModal, PickSkillModal, PickStudyGroupModal } from "../components/LearningBag/BagPickers";
 
@@ -88,6 +101,7 @@ export default function FlashCards() {
   const [pickFileForSkill, setPickFileForSkill] = useState<BagSkill | null>(null);
   const [pickSkillForFile, setPickSkillForFile] = useState<LibraryFile | null>(null);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [checks, setChecks] = useState(emptyChecks());
   const [collapsed, setCollapsed] = useState({ cards: false, files: true, skills: true });
   const toggleSection = (key: keyof typeof collapsed) =>
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -233,17 +247,17 @@ export default function FlashCards() {
   const empty = !items.length && !files.length;
 
   const grouped = items.reduce<Record<string, SavedFlashcard[]>>((acc, item) => {
-    const name = item.tag === "note" ? "Notes" : (item.group || "Ungrouped");
+    const name = folderLabel(item);
     (acc[name] ||= []).push(item);
     return acc;
   }, {});
-  const groupNames = Object.keys(grouped).sort((a, b) => {
-    if (a === "Ungrouped") return 1;
-    if (b === "Ungrouped") return -1;
-    if (a === "Notes") return 1;
-    if (b === "Notes") return -1;
-    return a.localeCompare(b);
+  const groupNames = Object.keys(grouped).sort(compareFolderLabels);
+  const reviewableFolders = groupNames.flatMap((name) => {
+    const folder = folderName(name);
+    return folder ? [folder] : [];
   });
+  const activeChecks = retainChecks(checks, reviewableFolders);
+  const selectedScope = scopeFromChecks(activeChecks);
 
   const flashcardItems = items.filter((item) => item.tag !== "note");
   const totalDue = countDueFlashcards(flashcardItems);
@@ -291,21 +305,34 @@ export default function FlashCards() {
           open={!collapsed.cards}
           onToggle={() => toggleSection("cards")}
           extra={
-            (totalDue > 0 || groupNames.some((name) => name !== "Notes")) ? (
+            (totalDue > 0 || reviewableFolders.length > 0) ? (
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 mr-3">
                 {totalDue > 0 && (
                   <button
                     type="button"
-                    onClick={() => navigate("/study?group=__all__&due=1")}
+                    onClick={() => navigate(studyPath(launch(allScope(), true)))}
                     className="px-3 py-1.5 rounded-lg border border-orange-500/50 bg-orange-600/20 text-xs text-orange-100 hover:bg-orange-600/30"
                   >
                     Review due ({totalDue})
                   </button>
                 )}
-                {groupNames.some((name) => name !== "Notes") && (
+                {reviewableFolders.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => navigate("/study?group=__all__")}
+                    disabled={selectedScope === null}
+                    onClick={() => {
+                      if (!selectedScope) return;
+                      navigate(studyPath(launch(selectedScope)));
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-orange-800/70 text-xs text-orange-200 hover:bg-orange-900/30 disabled:opacity-50 disabled:hover:bg-transparent"
+                  >
+                    Study selected
+                  </button>
+                )}
+                {reviewableFolders.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(studyPath(launch(allScope())))}
                     className="px-3 py-1.5 rounded-lg border border-orange-800/70 text-xs text-orange-200 hover:bg-orange-900/30"
                   >
                     Study all
@@ -318,16 +345,29 @@ export default function FlashCards() {
           <div className="space-y-3">
             {groupNames.map((name) => {
               const isOpen = openGroup === name;
+              const folder = folderName(name);
               const folderFlashcards = grouped[name].filter((c) => c.tag !== "note");
               const dueInFolder = countDueFlashcards(folderFlashcards);
               return (
                 <div key={name} className="rounded-2xl border border-zinc-800 bg-stone-950 overflow-hidden">
                   <div className="flex flex-col sm:flex-row sm:items-center min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => setOpenGroup(isOpen ? null : name)}
-                      className="flex-1 min-w-0 px-4 py-3 flex items-center gap-3 text-left hover:bg-stone-900/60"
-                    >
+                    <div className="flex min-w-0 flex-1 items-center">
+                      {folder && (
+                        <label className="flex shrink-0 items-center pl-3">
+                          <input
+                            type="checkbox"
+                            checked={activeChecks.has(folder)}
+                            onChange={() => setChecks((current) => toggleCheck(retainChecks(current, reviewableFolders), folder))}
+                            aria-label={`Select ${name}`}
+                            className="size-4 accent-orange-400"
+                          />
+                        </label>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setOpenGroup(isOpen ? null : name)}
+                        className="flex-1 min-w-0 px-4 py-3 flex items-center gap-3 text-left hover:bg-stone-900/60"
+                      >
                       <svg viewBox="0 0 24 24" className="size-5 shrink-0 text-orange-300" fill="currentColor">
                         <path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" />
                       </svg>
@@ -341,16 +381,19 @@ export default function FlashCards() {
                       <svg viewBox="0 0 24 24" className={`size-4 shrink-0 text-stone-500 transition-transform ${isOpen ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                       </svg>
-                    </button>
+                      </button>
+                    </div>
                     {name !== "Notes" && (
                       <div className="flex flex-wrap gap-2 px-4 pb-3 sm:items-center sm:pb-0 sm:pr-3">
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/study?group=${encodeURIComponent(name)}`)}
-                          className="px-3 py-1.5 rounded-lg border border-orange-800/70 text-xs text-orange-200 hover:bg-orange-900/30"
-                        >
-                          Study
-                        </button>
+                        {folder && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(studyPath(launch(oneFolder(folder))))}
+                            className="px-3 py-1.5 rounded-lg border border-orange-800/70 text-xs text-orange-200 hover:bg-orange-900/30"
+                          >
+                            Study
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => navigate(`/quiz?group=${encodeURIComponent(name)}`)}
